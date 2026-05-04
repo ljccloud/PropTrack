@@ -145,6 +145,9 @@ var SDSLABS=[
   {label:'Above £1,500,000',    to:Infinity,r:15}
 ];
 
+// VAT rate assumption (editable on Assumptions screen)
+var VAT_RATE=20;
+
 // ─── Config ──────────────────────────────────────────────────
 var SC={
   Active:   {bg:'#E8F5F0',t:'#1A6647',d:'#2D9E6B'},
@@ -204,7 +207,7 @@ var SAMPLE=[
 function migrate(p){
   // Comps
   var comps=Array.isArray(p.comps)?p.comps:(p.comps?[{cat:'Sold',addr:p.comps,price:'',sqft:'',sqm:''}]:[]);
-  comps=comps.map(function(c){return Object.assign({sqft:'',sqm:'',postcode:'',mapOn:true},c)});
+  comps=comps.map(function(c){return Object.assign({sqft:'',sqm:'',postcode:'',mapOn:true,beds:'',outdoor:'None',notes:''},c)});
   // Prior dates — keep only YYYY-MM
   var prior=(p.prior||[]).map(function(x){
     var m=String(x.m||'');
@@ -220,12 +223,13 @@ function migrate(p){
   FCATS.forEach(function(cat){
     if(!fees.find(function(f){return f.cat===cat}))fees.push({cat:cat,c:'',pct:''});
   });
-  // Auto-calc stamp duty if blank
+  // Auto-calc stamp duty — prefer offer price, fall back to listing price
   var sd=fees.find(function(f){return f.cat==='Stamp duty'});
-  if(sd&&!sd.c&&p.price)sd.c=String(calcStampDuty(p.price));
+  var sdBase=(p.offer&&p.offer.offerPrice)?p.offer.offerPrice:p.price;
+  if(sd&&!sd.c&&sdBase)sd.c=String(calcStampDuty(sdBase));
 
   return Object.assign(
-    {lease:'',area2:'',svc:'',yield:'',notes:'',outdoor:'None',status:'Active',offer:{}},
+    {lease:'',area2:'',svc:'',yield:'',notes:'',outdoor:'None',status:'Active',offer:{},renoVat:false,financing:{}},
     p,
     {comps:comps,prior:prior,renos:renos,fees:fees}
   );
@@ -324,13 +328,22 @@ function calcStampDuty(price){
   return duty;
 }
 
+// Returns the renovation cost to use in offer — inc. VAT if checked
+function renoOfferValue(p){
+  var tot=rtotal(p.renos);
+  if(!tot)return 0;
+  return p.renoVat?tot+Math.round(tot*VAT_RATE/100):tot;
+}
+
 // ─── Offer HTML (always fresh from p.offer) ──────────────────
 function offerHtml(p){
   var o=p.offer||{};
   // Seed from table totals only when field is still empty
-  var rt=rtotal(p.renos), ft=ftotal(p.fees);
-  if(rt&&!o.reno) o.reno=String(rt);
-  if(ft&&!o.fees) o.fees=String(ft);
+  var rv=renoOfferValue(p), ft=ftotal(p.fees);
+  var fc=calcFinancing(p).finCost;
+  if(rv&&!o.reno)    o.reno=String(rv);
+  if(ft&&!o.fees)    o.fees=String(ft);
+  if(fc&&!o.financing) o.financing=String(fc);
 
   var op=parseInt(o.offerPrice,10)||0;
   var fe=parseInt(o.fees,10)||0;
@@ -349,7 +362,7 @@ function offerHtml(p){
       +irow('Offer price',      'offerPrice',o.offerPrice)
       +irow('Purchase fees',    'fees',      o.fees,  'offer-fees-inp')
       +irow('Renovation cost',  'reno',      o.reno,  'offer-reno-inp')
-      +irow('Financing charges','financing', o.financing)
+      +irow('Financing charges','financing', o.financing,'offer-fin-inp')
       +'<tr class="sub"><td>Total cost</td><td id="offer-tc">'+(tc?C+tc.toLocaleString('en-GB'):'')+'</td></tr>'
       +irow('Potential resale', 'resale',    o.resale)
       +'<tr class="profit"><td>Potential profit</td><td id="offer-pr" style="color:'+pc+'">'+(pr!==null?(pr>=0?'+':'')+C+Math.abs(pr).toLocaleString('en-GB'):'')+'</td></tr>'
@@ -376,6 +389,9 @@ function buildRenoHtml(p){
   var allCats=RCATS.slice();
   renos.forEach(function(r){if(r.cat&&allCats.indexOf(r.cat)<0)allCats.push(r.cat);});
   var tot=rtotal(renos);
+  var vatOn=p.renoVat===true;
+  var vatAmt=vatOn&&tot?Math.round(tot*VAT_RATE/100):0;
+  var totVat=tot+vatAmt;
   var rows='';
   allCats.forEach(function(cat){
     var isStd=RCATS.indexOf(cat)>=0;
@@ -386,9 +402,20 @@ function buildRenoHtml(p){
         +'</td><td>£&thinsp;<input type="number" class="oi" data-ri="'+ri+'" value="'+esc(r.c||'')+'" placeholder="0"></td></tr>';
     });
   });
+
+  // Custom checkbox for VAT toggle
+  var cbHtml='<div data-action="toggle-reno-vat" style="display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;flex-shrink:0;border-radius:4px;border:1.5px solid '+(vatOn?'var(--a)':'var(--bd2)')+';background:'+(vatOn?'var(--a)':'transparent')+';cursor:pointer;vertical-align:middle;margin-right:6px">'
+    +(vatOn?'<svg width="9" height="7" viewBox="0 0 10 8" fill="none"><path d="M1 4l3 3 5-6" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')
+  +'</div>';
+
   return'<div id="reno-sec"><table class="otbl">'
     +rows
     +'<tr class="sub"><td>Total estimate</td><td id="reno-total">'+(tot?C+tot.toLocaleString('en-GB'):'')+'</td></tr>'
+    +'<tr style="background:var(--sf2)">'
+      +'<td style="color:var(--t2)">'+cbHtml+'Total incl. VAT ('+VAT_RATE+'%)</td>'
+      +'<td id="reno-vat-total" style="font-weight:'+(vatOn?'600':'400')+';color:'+(vatOn?'var(--t)':'var(--t3)')+';">'
+        +(vatOn&&totVat?C+totVat.toLocaleString('en-GB'):'—')+'</td>'
+    +'</tr>'
     +'<tr><td colspan="2" style="padding:8px 10px">'+addInput('reno-new-cat')+addBtn('Add','ar-a')+'</td></tr>'
   +'</table></div>';
 }
@@ -424,17 +451,59 @@ function buildFeesHtml(p){
   +'</table></div>';
 }
 
-// ─── Comparables HTML ────────────────────────────────────────
+// ─── Financing charges HTML ───────────────────────────────────
+function calcFinancing(p){
+  var f=p.financing||{};
+  var tc=parseInt((p.offer&&p.offer.offerPrice)||0,10)+parseInt((p.offer&&p.offer.fees)||0,10)+parseInt((p.offer&&p.offer.reno)||0,10);
+  var loan=parseInt(f.loanAmt,10)||(tc||0);
+  var rate=parseFloat(f.rate)||0;
+  var months=parseInt(f.months,10)||0;
+  var annualInt=loan&&rate?Math.round(loan*rate/100):0;
+  var monthlyInt=annualInt?Math.round(annualInt/12):0;
+  var finCost=monthlyInt&&months?monthlyInt*months:0;
+  return{loan:loan,rate:rate,months:months,annualInt:annualInt,monthlyInt:monthlyInt,finCost:finCost,tc:tc};
+}
+
+function buildFinancingHtml(p){
+  var f=p.financing||{};
+  var c=calcFinancing(p);
+  function irow(label,id,val,placeholder){
+    return'<tr><td>'+label+'</td><td>£&thinsp;<input type="number" class="oi" data-fin="'+id+'" value="'+esc(val)+'" placeholder="'+(placeholder||'0')+'"></td></tr>';
+  }
+  function rrow(label,id,val){
+    return'<tr><td>'+label+'</td><td style="font-size:12px;font-weight:600" id="'+id+'">'+(val?C+val.toLocaleString('en-GB'):'—')+'</td></tr>';
+  }
+  return'<div id="fin-sec">'+sh('Financing charges')
+    +'<table class="otbl">'
+      +irow('Loan amount','loanAmt',f.loanAmt!=null?f.loanAmt:c.tc,'e.g. 850000')
+      +'<tr><td>Interest rate</td><td><input type="number" class="oi" data-fin="rate" step="0.01" value="'+esc(f.rate||'')+'" placeholder="e.g. 5.5">%</td></tr>'
+      +rrow('Annual interest','fin-annual',c.annualInt)
+      +rrow('Monthly interest','fin-monthly',c.monthlyInt)
+      +'<tr><td>Months to complete</td><td><input type="number" class="oi" data-fin="months" value="'+esc(f.months||'')+'" placeholder="e.g. 6"></td></tr>'
+      +'<tr class="sub"><td>Financing cost</td><td id="fin-cost">'+(c.finCost?C+c.finCost.toLocaleString('en-GB'):'—')+'</td></tr>'
+    +'</table></div>';
+}
+
+function getSubjectPc(p){
+  // Try area2 first, then last word of address
+  var src=p.area2||p.address||'';
+  var parts=src.trim().split(/\s+/);
+  // Check last two words (full postcode has a space: W1U 7PT)
+  for(var i=parts.length-1;i>=Math.max(0,parts.length-3);i--){
+    var candidate=(i>0?parts[i-1]+' ':'')+parts[i];
+    if(/^[A-Z]{1,2}\d[A-Z\d]?\s+\d[A-Z]{2}$/i.test(candidate.trim()))return candidate.trim().toUpperCase();
+    if(/^[A-Z]{1,2}\d[A-Z\d]?\d[A-Z]{2}$/i.test(parts[i]))return parts[i].toUpperCase();
+  }
+  return '';
+}
+
 function buildCompsHtml(p){
   if(!p.comps||!p.comps.length)return'';
   var COMP_CATS=['For Sale','Sold','Auctioned','Sold at auction'];
   var sPpa=parseInt(p.price,10)&&parseInt(p.area,10)?Math.round(parseInt(p.price,10)/parseInt(p.area,10)):0;
   var sUnit=p.unit||'sq ft';
-  var hasPostcodes=p.comps.some(function(c){return c.postcode&&c.postcode.trim();});
-  // Extract subject postcode from area2 (last word if it looks like a postcode)
-  var subjectPc='';
-  if(p.area2){var parts=p.area2.trim().split(/\s+/);var last=parts[parts.length-1];if(/^[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$/i.test(last))subjectPc=last.toUpperCase();}
-  var showMap=hasPostcodes||subjectPc;
+  var subjectPc=getSubjectPc(p);
+  var showMap=subjectPc||p.comps.some(function(c){return c.postcode&&c.postcode.trim();});
 
   var out=sh('Comparables');
   if(showMap)out+='<div id="comp-map"></div>';
@@ -446,7 +515,7 @@ function buildCompsHtml(p){
     out+='<div class="rl" style="margin-bottom:10px">';
     items.forEach(function(c){
       var gi=p.comps.indexOf(c);
-      var checked=c.mapOn!==false; // default on
+      var checked=c.mapOn!==false;
       var pr=parseInt(c.price,10)||0, ar=0, aUnit='';
       if(c.sqft){ar=parseInt(c.sqft,10);aUnit='sq ft';}
       else if(c.sqm){ar=parseInt(c.sqm,10);aUnit='sq m';}
@@ -456,10 +525,15 @@ function buildCompsHtml(p){
         ppaHtml='<span style="font-size:11px;font-weight:600;color:'+col+'">'+C+cPpa.toLocaleString('en-GB')+'/'+aUnit+'</span>';
       }
       var aStr=ar?'<span style="font-size:11px;color:var(--t3)">'+ar.toLocaleString('en-GB')+'\u00a0'+aUnit+'</span>':'';
-      var cbStyle='width:16px;height:16px;accent-color:var(--a);cursor:pointer;flex-shrink:0;margin-right:8px;margin-top:2px';
+      // Custom styled checkbox (reliable across WebKit/iOS)
+      var cbHtml=c.postcode
+        ?'<div data-action="toggle-comp" data-ci="'+gi+'" style="width:18px;height:18px;flex-shrink:0;margin-right:10px;margin-top:1px;border-radius:5px;border:1.5px solid '+(checked?'var(--a)':'var(--bd2)')+';background:'+(checked?'var(--a)':'transparent')+';display:flex;align-items:center;justify-content:center;cursor:pointer">'
+          +(checked?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l3 3 5-6" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')
+        +'</div>'
+        :'<div style="width:18px;flex-shrink:0;margin-right:10px"></div>';
       out+='<div class="ri" style="flex-direction:column;align-items:flex-start;gap:4px">'
         +'<div style="display:flex;width:100%;align-items:flex-start">'
-          +(c.postcode?'<input type="checkbox" style="'+cbStyle+'" data-action="toggle-comp" data-ci="'+gi+'"'+(checked?' checked':'')+'>':'')
+          +cbHtml
           +'<div style="flex:1;min-width:0">'
             +'<div style="display:flex;justify-content:space-between;align-items:baseline">'
               +'<div style="flex:1;padding-right:8px">'
@@ -469,6 +543,11 @@ function buildCompsHtml(p){
               +'<span style="font-size:13px;font-weight:600;white-space:nowrap">'+money(c.price)+'</span>'
             +'</div>'
             +(aStr||ppaHtml?'<div style="display:flex;gap:10px;margin-top:3px">'+aStr+ppaHtml+'</div>':'')
+            +((c.beds||c.outdoor||c.notes)?'<div style="font-size:11px;color:var(--t2);margin-top:3px;display:flex;gap:10px;flex-wrap:wrap">'
+              +(c.beds?'<span>'+esc(c.beds)+' bed</span>':'')
+              +(c.outdoor&&c.outdoor!=='None'?'<span>'+esc(c.outdoor)+'</span>':'')
+              +(c.notes?'<span style="color:var(--t3);font-style:italic">'+esc(c.notes)+'</span>':'')
+            +'</div>':'')
           +'</div>'
         +'</div>'
       +'</div>';
@@ -498,16 +577,9 @@ function initCompMap(p){
 
   var CAT_COLOR={'For Sale':'#2E7AC9','Sold':'#2D9E6B','Auctioned':'#E8920A','Sold at auction':'#8B5CF6'};
   var markers=[];
-
-  // Subject property postcode
-  var subjectPc='';
-  if(p.area2){var parts=p.area2.trim().split(/\s+/);var last=parts[parts.length-1];if(/^[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$/i.test(last))subjectPc=last.toUpperCase();}
-
-  // Comps to show (checked ones with postcodes)
+  var subjectPc=getSubjectPc(p);
   var toShow=p.comps.filter(function(c){return c.postcode&&c.postcode.trim()&&c.mapOn!==false;});
-
   var pending=(subjectPc?1:0)+toShow.length;
-  if(!pending){map.setView([51.5074,-0.1278],12);return;}
 
   function onAllDone(){
     if(markers.length)map.fitBounds(L.featureGroup(markers).getBounds().pad(0.3));
@@ -521,21 +593,22 @@ function initCompMap(p){
       .catch(function(){callback(null);});
   }
 
-  // Subject property pin — star shape, dark green
+  function done(){pending--;if(pending===0)onAllDone();}
+
+  // Subject property — use postcode if available, else full address
   if(subjectPc){
     geocode(subjectPc,function(result){
       if(result){
-        var starIcon=L.divIcon({
+        var icon=L.divIcon({
           className:'',
-          html:'<div style="width:18px;height:18px;background:var(--a,#2D5F4A);border:2px solid #fff;border-radius:4px;box-shadow:0 1px 5px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;font-size:10px;color:#fff">★</div>',
-          iconSize:[18,18],iconAnchor:[9,9]
+          html:'<div style="width:20px;height:20px;background:#2D5F4A;border:2px solid #fff;border-radius:5px;box-shadow:0 1px 5px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;font-weight:700">★</div>',
+          iconSize:[20,20],iconAnchor:[10,10]
         });
-        var m=L.marker([parseFloat(result.lat),parseFloat(result.lon)],{icon:starIcon,zIndexOffset:1000}).addTo(map);
-        m.bindPopup('<div class="comp-popup"><strong>Subject property</strong>'+esc(p.address)+(subjectPc?' · '+subjectPc:'')+'<br>'+money(p.price)+'</div>');
+        var m=L.marker([parseFloat(result.lat),parseFloat(result.lon)],{icon:icon,zIndexOffset:1000}).addTo(map);
+        m.bindPopup('<div class="comp-popup"><strong>Subject property</strong>'+esc(p.address)+(subjectPc?' \u00b7 '+subjectPc:'')+'<br>'+money(p.price)+'</div>');
         markers.push(m);
       }
-      pending--;
-      if(pending===0)onAllDone();
+      done();
     });
   }
 
@@ -550,21 +623,35 @@ function initCompMap(p){
           iconSize:[12,12],iconAnchor:[6,6]
         });
         var m=L.marker([parseFloat(result.lat),parseFloat(result.lon)],{icon:icon}).addTo(map);
-        m.bindPopup('<div class="comp-popup"><strong>'+esc(c.addr)+' \u00b7 '+esc(c.postcode)+'</strong>'+money(c.price)+' \u00b7 <em>'+esc(c.cat)+'</em></div>');
+        var popup='<div class="comp-popup"><strong>'+esc(c.addr)+' \u00b7 '+esc(c.postcode)+'</strong>'+money(c.price)+' \u00b7 <em>'+esc(c.cat)+'</em>';
+        if(c.beds)popup+='<br>'+esc(c.beds)+' bed';
+        if(c.outdoor&&c.outdoor!=='None')popup+=' \u00b7 '+esc(c.outdoor);
+        if(c.notes)popup+='<br><em>'+esc(c.notes)+'</em>';
+        popup+='</div>';
+        m.bindPopup(popup);
         markers.push(m);
       }
-      pending--;
-      if(pending===0)onAllDone();
+      done();
     });
   });
+
+  if(!pending)onAllDone();
 }
 
-// Toggle a comp's map visibility and refresh the map
+// Toggle a comp's map visibility — update checkbox DOM directly, refresh map
 function toggleCompMap(ci){
   var p=props.find(function(x){return x.id===vid});
   if(!p||!p.comps[ci])return;
-  p.comps[ci].mapOn=p.comps[ci].mapOn===false?true:false;
+  p.comps[ci].mapOn=p.comps[ci].mapOn===false;
   save();
+  // Update the checkbox div in place without re-rendering the list
+  var cb=document.querySelector('[data-action="toggle-comp"][data-ci="'+ci+'"]');
+  if(cb){
+    var checked=p.comps[ci].mapOn!==false;
+    cb.style.borderColor=checked?'var(--a)':'var(--bd2)';
+    cb.style.background=checked?'var(--a)':'transparent';
+    cb.innerHTML=checked?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l3 3 5-6" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>':'';
+  }
   initCompMap(p);
 }
 
@@ -627,10 +714,11 @@ function showAnalysis(){
   var listPrice=parseInt(p.price,10)||0;
   var mo=listPrice&&yp?Math.round(listPrice*yp/100/12):0;
 
-  // Auto-calc stamp duty if blank
+  // Auto-calc stamp duty — prefer offer price, fall back to listing price
   if(p.fees){
     var sd=p.fees.find(function(f){return f.cat==='Stamp duty'});
-    if(sd&&!sd.c&&p.price){sd.c=String(calcStampDuty(p.price));save();}
+    var sdBase=(p.offer&&p.offer.offerPrice)?p.offer.offerPrice:p.price;
+    if(sd&&!sd.c&&sdBase){sd.c=String(calcStampDuty(sdBase));save();}
   }
 
   // Price history
@@ -695,6 +783,8 @@ function showAnalysis(){
     +sh('Renovations required')+buildRenoHtml(p)
     // Purchase fees
     +sh('Purchase fees')+buildFeesHtml(p)
+    // Financing charges
+    +buildFinancingHtml(p)
     // Comparables
     +buildCompsHtml(p)
     // Notes
@@ -715,9 +805,7 @@ function showAnalysis(){
   });
 
   // Initialise comparables map if any postcodes present (comps or subject)
-  var subjectPcCheck='';
-  if(p.area2){var pts=p.area2.trim().split(/\s+/);var lt=pts[pts.length-1];if(/^[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$/i.test(lt))subjectPcCheck=lt;}
-  if(subjectPcCheck||(p.comps&&p.comps.some(function(c){return c.postcode&&c.postcode.trim();})))initCompMap(p);
+  if(getSubjectPc(p)||(p.comps&&p.comps.some(function(c){return c.postcode&&c.postcode.trim();})))initCompMap(p);
 }
 
 // ─── Assumptions screen ──────────────────────────────────────
@@ -740,6 +828,15 @@ function showAssumptions(){
       +rows
     +'</table>'
     +'<button data-action="reset-sd" style="font-size:13px;color:var(--t2);background:none;border:1px solid var(--bd2);border-radius:10px;padding:8px 14px;cursor:pointer;font-family:\'DM Sans\',sans-serif">Reset to defaults</button>'
+    +sh('VAT rate')
+    +'<div style="font-size:12px;color:var(--t2);margin-bottom:12px;line-height:1.5">Used to calculate the total including VAT in the Renovations required table.</div>'
+    +'<table class="otbl" style="margin-bottom:16px">'
+      +'<tr><td style="font-size:12px">VAT rate</td>'
+        +'<td style="white-space:nowrap">'
+          +'<input type="number" class="oi" step="0.1" min="0" max="99" data-sv="vat" value="'+VAT_RATE+'" style="width:44px;border:1px solid var(--bd2);border-radius:6px;padding:2px 4px">%'
+        +'</td></tr>'
+    +'</table>'
+    +'<button data-action="reset-vat" style="font-size:13px;color:var(--t2);background:none;border:1px solid var(--bd2);border-radius:10px;padding:8px 14px;cursor:pointer;font-family:\'DM Sans\',sans-serif">Reset to default (20%)</button>'
     +sh('About stamp duty calculations')
     +'<div style="font-size:12px;color:var(--t2);line-height:1.65">'
       +'Calculated on a marginal basis — each band rate applies only to the portion of the price within that band. '
@@ -804,11 +901,16 @@ function renderForm(){
           +'<input style="width:95px;flex-shrink:0" type="text" data-f="comp-price" data-i="'+gi+'" value="'+esc(c.price)+'" placeholder="\u00a3 price">'
           +'<button class="rm" data-action="rc" data-i="'+gi+'">\u00d7</button>'
         +'</div>'
-        +'<div style="display:flex;gap:8px;margin-top:8px">'
+        +'<div style="display:flex;gap:8px;margin-bottom:8px">'
           +'<div style="flex:2;min-width:0"><label class="fl" style="font-size:10px">Postcode</label><input type="text" data-f="comp-postcode" data-i="'+gi+'" value="'+esc(c.postcode||'')+'" placeholder="e.g. SW1A 1AA" style="text-transform:uppercase"></div>'
           +'<div style="flex:1;min-width:0"><label class="fl" style="font-size:10px">Sq Ft</label><input type="number" data-f="comp-sqft" data-i="'+gi+'" value="'+esc(c.sqft||'')+'" placeholder="e.g. 720"></div>'
           +'<div style="flex:1;min-width:0"><label class="fl" style="font-size:10px">Sq M</label><input type="number" data-f="comp-sqm" data-i="'+gi+'" value="'+esc(c.sqm||'')+'" placeholder="e.g. 67"></div>'
         +'</div>'
+        +'<div style="display:flex;gap:8px;margin-bottom:8px">'
+          +'<div style="flex:1;min-width:0"><label class="fl" style="font-size:10px">Bedrooms</label><input type="number" data-f="comp-beds" data-i="'+gi+'" value="'+esc(c.beds||'')+'" placeholder="0"></div>'
+          +'<div style="flex:2;min-width:0"><label class="fl" style="font-size:10px">Outdoor space</label><select data-f="comp-outdoor" data-i="'+gi+'">'+opts(OUTDOOR,c.outdoor||'None')+'</select></div>'
+        +'</div>'
+        +'<div class="fg" style="margin-bottom:0"><label class="fl" style="font-size:10px">Notes</label><input type="text" data-f="comp-notes" data-i="'+gi+'" value="'+esc(c.notes||'')+'" placeholder="e.g. top floor, period features"></div>'
       +'</div>';
     });
     if(!items.length)ch+='<div style="font-size:12px;color:var(--t3);padding:4px 0 6px">No '+cat.toLowerCase()+' comparables added</div>';
@@ -857,7 +959,7 @@ function renderForm(){
 function newForm(){
   return{id:Date.now(),address:'',area2:'',price:'',area:'',unit:'sq ft',beds:'',baths:'',
     method:'Private treaty',date:'',tenure:'Freehold',lease:'',outdoor:'None',svc:'',
-    notes:'',yield:'',comps:[],
+    notes:'',yield:'',comps:[],renoVat:false,financing:{},
     renos:RCATS.map(function(cat){return{cat:cat,c:''}}),
     fees: FCATS.map(function(cat){return{cat:cat,c:'',pct:''}}),
     prior:[],arch:false,status:'Active',offer:{}};
@@ -929,6 +1031,26 @@ document.addEventListener('click',function(e){
   var fi=el.dataset.fi!=null?+el.dataset.fi:null;
 
   // Comparables map toggle checkbox
+  if(a==='toggle-reno-vat'){
+    var p=props.find(function(x){return x.id===vid});
+    if(p){
+      p.renoVat=!p.renoVat;
+      // Sync offer.reno to the correct value (incl or excl VAT)
+      var rv=renoOfferValue(p);
+      if(!p.offer)p.offer={};
+      p.offer.reno=rv?String(rv):'';
+      save();
+      // Re-render the reno table (checkbox state + VAT row)
+      var sec=$('reno-sec');
+      if(sec)sec.outerHTML=buildRenoHtml(p);
+      // Update offer inputs + calculated cells
+      var rInp=$('offer-reno-inp');if(rInp)rInp.value=rv||'';
+      refreshOfferCells(p);
+    }
+    return;
+  }
+
+  // Comparables map toggle checkbox
   if(a==='toggle-comp'){
     var ci=el.dataset.ci!=null?+el.dataset.ci:null;
     if(ci!=null)toggleCompMap(ci);
@@ -940,6 +1062,7 @@ document.addEventListener('click',function(e){
   if(a==='save')   {doSave();return;}
   if(a==='archive'){doArchive(id);return;}
   if(a==='reset-sd'){SDSLABS[0].r=3;SDSLABS[1].r=5;SDSLABS[2].r=8;SDSLABS[3].r=13;SDSLABS[4].r=15;showAssumptions();return;}
+  if(a==='reset-vat'){VAT_RATE=20;showAssumptions();return;}
 
   // Form — renos
   if(a==='ar'){addFromInput('reno-new-cat-f',function(v){form.renos=(form.renos||[]).concat([{cat:v,c:''}])},renderForm);return;}
@@ -951,7 +1074,7 @@ document.addEventListener('click',function(e){
   if(a==='ap'){form.prior=(form.prior||[]).concat([{p:'',m:''}]);renderForm();return;}
   if(a==='rp'){form.prior=(form.prior||[]).filter(function(_,j){return j!==i});renderForm();return;}
   // Form — comps
-  if(a==='ac'){form.comps=(form.comps||[]).concat([{cat:el.dataset.cat,addr:'',postcode:'',price:'',sqft:'',sqm:'',mapOn:true}]);renderForm();return;}
+  if(a==='ac'){form.comps=(form.comps||[]).concat([{cat:el.dataset.cat,addr:'',postcode:'',price:'',sqft:'',sqm:'',mapOn:true,beds:'',outdoor:'None',notes:''}]);renderForm();return;}
   if(a==='rc'){form.comps=(form.comps||[]).filter(function(_,j){return j!==i});renderForm();return;}
 
   // Analysis — renos
@@ -985,6 +1108,12 @@ document.addEventListener('input',function(e){
   if(el.dataset.si!=null&&screen==='assumptions'){
     var si=+el.dataset.si;
     if(SDSLABS[si]!=null)SDSLABS[si].r=parseFloat(val)||0;
+    return;
+  }
+
+  // Assumptions — VAT rate
+  if(el.dataset.sv&&screen==='assumptions'){
+    VAT_RATE=parseFloat(val)||0;
     return;
   }
 
@@ -1022,11 +1151,38 @@ document.addEventListener('input',function(e){
     if(!p.renos[ri])return;
     p.renos[ri].c=val;
     var tot=rtotal(p.renos);
+    var rv=renoOfferValue(p);
     if(!p.offer)p.offer={};
-    p.offer.reno=tot?String(tot):'';
+    p.offer.reno=rv?String(rv):'';
     save();
     var tEl=$('reno-total');if(tEl)tEl.textContent=tot?C+tot.toLocaleString('en-GB'):'';
-    var rInp=$('offer-reno-inp');if(rInp)rInp.value=tot||'';
+    var rInp=$('offer-reno-inp');if(rInp)rInp.value=rv||'';
+    // Refresh VAT cell if checked
+    var vatEl=$('reno-vat-total');
+    if(vatEl&&p.renoVat){
+      var vatAmt=Math.round(tot*VAT_RATE/100);
+      vatEl.textContent=(tot+vatAmt)?C+(tot+vatAmt).toLocaleString('en-GB'):'—';
+    }
+    refreshOfferCells(p);
+    return;
+  }
+
+  // Analysis — financing fields
+  if(el.dataset.fin!=null&&screen==='analysis'){
+    var p=props.find(function(x){return x.id===vid});
+    if(!p)return;
+    if(!p.financing)p.financing={};
+    p.financing[el.dataset.fin]=val;
+    var c=calcFinancing(p);
+    // Update read-only calculated cells
+    var annEl=$('fin-annual');  if(annEl) annEl.textContent=c.annualInt?C+c.annualInt.toLocaleString('en-GB'):'—';
+    var monEl=$('fin-monthly'); if(monEl) monEl.textContent=c.monthlyInt?C+c.monthlyInt.toLocaleString('en-GB'):'—';
+    var costEl=$('fin-cost');   if(costEl)costEl.textContent=c.finCost?C+c.finCost.toLocaleString('en-GB'):'—';
+    // Sync financing cost to offer.financing
+    if(!p.offer)p.offer={};
+    p.offer.financing=c.finCost?String(c.finCost):'';
+    var fInp=$('offer-fin-inp');if(fInp)fInp.value=c.finCost||'';
+    save();
     refreshOfferCells(p);
     return;
   }
@@ -1037,8 +1193,48 @@ document.addEventListener('input',function(e){
     if(!p)return;
     if(!p.offer)p.offer={};
     p.offer[el.dataset.of]=val;
+    // When offer price changes, recalculate stamp duty automatically
+    if(el.dataset.of==='offerPrice'&&p.fees){
+      var sd=p.fees.find(function(f){return f.cat==='Stamp duty'});
+      if(sd){
+        sd.c=val?String(calcStampDuty(val)):'';
+        // Update the stamp duty input in the fees table if visible
+        var sdInputs=document.querySelectorAll('[data-fi]');
+        sdInputs.forEach(function(inp){
+          if(inp.dataset.fi!=null&&p.fees[+inp.dataset.fi]&&p.fees[+inp.dataset.fi].cat==='Stamp duty'){
+            inp.value=sd.c||'';
+          }
+        });
+        // Refresh fees total
+        var ft=ftotal(p.fees);
+        p.offer.fees=ft?String(ft):'';
+        var ftEl=$('fees-total');if(ftEl)ftEl.textContent=ft?C+ft.toLocaleString('en-GB'):'';
+        var fInp=$('offer-fees-inp');if(fInp)fInp.value=ft||'';
+      }
+    }
+    // Update special condition fees if they use a percentage of offer price
+    if((el.dataset.of==='offerPrice')&&p.fees){
+      p.fees.forEach(function(f,fi){
+        if(f.cat==='Special condition fees'&&f.pct){
+          var newAmt=Math.round((parseInt(val,10)||0)*parseFloat(f.pct)/100);
+          f.c=newAmt?String(newAmt):'';
+          var spcEl=$('spcf-amt');if(spcEl)spcEl.textContent=newAmt?C+newAmt.toLocaleString('en-GB'):'—';
+          var fInps=document.querySelectorAll('[data-fi]');
+          fInps.forEach(function(inp){if(+inp.dataset.fi===fi&&!inp.dataset.feePct)inp.value=f.c;});
+        }
+      });
+      var ft2=ftotal(p.fees);
+      p.offer.fees=ft2?String(ft2):'';
+      var ftEl2=$('fees-total');if(ftEl2)ftEl2.textContent=ft2?C+ft2.toLocaleString('en-GB'):'';
+      var fInp2=$('offer-fees-inp');if(fInp2)fInp2.value=ft2||'';
+    }
     save();
     refreshOfferCells(p);
+    // Refresh financing table if total cost changes (loan amount is linked)
+    if(el.dataset.of==='offerPrice'||el.dataset.of==='fees'||el.dataset.of==='reno'){
+      var finSec=$('fin-sec');
+      if(finSec)finSec.outerHTML=buildFinancingHtml(p);
+    }
     return;
   }
 
@@ -1058,6 +1254,9 @@ document.addEventListener('input',function(e){
   else if(f==='comp-addr'    &&i!=null&&form.comps[i]) form.comps[i].addr=val;
   else if(f==='comp-postcode'&&i!=null&&form.comps[i]) form.comps[i].postcode=val.toUpperCase();
   else if(f==='comp-price'   &&i!=null&&form.comps[i]) form.comps[i].price=val;
+  else if(f==='comp-beds'    &&i!=null&&form.comps[i]) form.comps[i].beds=val;
+  else if(f==='comp-outdoor' &&i!=null&&form.comps[i]) form.comps[i].outdoor=val;
+  else if(f==='comp-notes'   &&i!=null&&form.comps[i]) form.comps[i].notes=val;
   else if(f==='comp-sqft' &&i!=null&&form.comps[i]){form.comps[i].sqft=val;if(val)form.comps[i].sqm='';}
   else if(f==='comp-sqm'  &&i!=null&&form.comps[i]){form.comps[i].sqm=val;if(val)form.comps[i].sqft='';}
 });
@@ -1073,6 +1272,7 @@ document.addEventListener('change',function(e){
   else if(f==='prior-m'&&i!=null&&form.prior[i]) form.prior[i].m=val;
   else if(f==='comp-sqft'&&i!=null&&form.comps[i]){form.comps[i].sqft=val;if(val)form.comps[i].sqm='';}
   else if(f==='comp-sqm' &&i!=null&&form.comps[i]){form.comps[i].sqm=val;if(val)form.comps[i].sqft='';}
+  else if(f==='comp-outdoor'&&i!=null&&form.comps[i])form.comps[i].outdoor=val;
 });
 
 // ─── Boot ─────────────────────────────────────────────────────
