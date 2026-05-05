@@ -132,6 +132,111 @@ select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/
   <div id="tabs" class="tab-bar"></div>
 </div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://accounts.google.com/gsi/client" async></script>
+<script>
+// ─── Google Drive Sync ───────────────────────────────────────
+// Replace with your own OAuth Client ID from console.cloud.google.com
+var GD_CLIENT_ID='YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com';
+var GD_SCOPE='https://www.googleapis.com/auth/drive.appdata';
+var GD_FILE_NAME='property-tracker-data.json';
+var gdToken=null;
+var gdFileId=null; // cached Drive file ID
+
+function gdSignIn(){
+  if(!window.google||!GD_CLIENT_ID||GD_CLIENT_ID.includes('YOUR_')){
+    alert('To enable Google Drive sync, replace GD_CLIENT_ID in the script with your OAuth Client ID from console.cloud.google.com');
+    return;
+  }
+  var client=google.accounts.oauth2.initTokenClient({
+    client_id:GD_CLIENT_ID,
+    scope:GD_SCOPE,
+    callback:function(resp){
+      if(resp.error){console.error('GDrive auth error',resp);return;}
+      gdToken=resp.access_token;
+      localStorage.setItem('gd_token',gdToken);
+      gdSyncStatus('Signed in \u2713');
+      gdLoad();
+    }
+  });
+  client.requestAccessToken();
+}
+
+function gdSyncStatus(msg,isErr){
+  var el=document.getElementById('gd-status');
+  if(el){el.textContent=msg;el.style.color=isErr?'var(--d)':'var(--a)';}
+}
+
+function gdFetch(method,url,body,cb){
+  var opts={method:method,headers:{Authorization:'Bearer '+gdToken,'Content-Type':'application/json'}};
+  if(body)opts.body=JSON.stringify(body);
+  fetch(url,opts).then(function(r){return r.ok?r.json():r.json().then(function(e){throw e;});}).then(cb).catch(function(e){
+    gdSyncStatus('Sync error: '+(e.error&&e.error.message||'unknown'),true);
+    console.error('GDrive error',e);
+  });
+}
+
+function gdFindFile(cb){
+  if(gdFileId){cb(gdFileId);return;}
+  var q=encodeURIComponent("name='"+GD_FILE_NAME+"' and 'appDataFolder' in parents and trashed=false");
+  fetch('https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q='+q+'&fields=files(id)',{headers:{Authorization:'Bearer '+gdToken}})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      gdFileId=(d.files&&d.files.length)?d.files[0].id:null;
+      cb(gdFileId);
+    });
+}
+
+function gdSave(){
+  if(!gdToken){gdSyncStatus('Sign in to sync');return;}
+  var data=JSON.stringify(props);
+  gdFindFile(function(fid){
+    if(fid){
+      // Update existing file
+      fetch('https://www.googleapis.com/upload/drive/v3/files/'+fid+'?uploadType=media',{
+        method:'PATCH',
+        headers:{Authorization:'Bearer '+gdToken,'Content-Type':'application/json'},
+        body:data
+      }).then(function(){gdSyncStatus('Saved to Drive \u2713');}).catch(function(e){gdSyncStatus('Save failed',true);});
+    } else {
+      // Create new file in appDataFolder
+      var meta={name:GD_FILE_NAME,parents:['appDataFolder']};
+      gdFetch('POST','https://www.googleapis.com/drive/v3/files',meta,function(f){
+        gdFileId=f.id;
+        fetch('https://www.googleapis.com/upload/drive/v3/files/'+f.id+'?uploadType=media',{
+          method:'PATCH',
+          headers:{Authorization:'Bearer '+gdToken,'Content-Type':'application/json'},
+          body:data
+        }).then(function(){gdSyncStatus('Saved to Drive \u2713');});
+      });
+    }
+  });
+}
+
+function gdLoad(){
+  if(!gdToken)return;
+  gdSyncStatus('Loading from Drive\u2026');
+  gdFindFile(function(fid){
+    if(!fid){gdSyncStatus('No Drive data yet — will save on next change');return;}
+    fetch('https://www.googleapis.com/drive/v3/files/'+fid+'?alt=media',{headers:{Authorization:'Bearer '+gdToken}})
+      .then(function(r){return r.json();})
+      .then(function(data){
+        if(Array.isArray(data)){
+          props=data.map(migrate);
+          gdSyncStatus('Loaded from Drive \u2713');
+          if(screen==='list')showList();
+          else showAnalysis();
+        }
+      }).catch(function(){gdSyncStatus('Load failed',true);});
+  });
+}
+
+// Override save() to also push to Drive
+var _localSave=save;
+function save(){
+  _localSave();
+  if(gdToken)gdSave();
+}
+</script>
 <script>
 // ─── State ───────────────────────────────────────────────────
 var C='£', form={}, props=[], tab='current', screen='list', vid=null, eid=null;
@@ -509,50 +614,59 @@ function buildCompsHtml(p){
   if(showMap)out+='<div id="comp-map"></div>';
 
   COMP_CATS.forEach(function(cat){
-    var items=p.comps.filter(function(c){return c.cat===cat});
+    var items=[];
+    p.comps.forEach(function(c,gi){if(c.cat===cat)items.push({c:c,gi:gi});});
     if(!items.length)return;
     out+='<div style="margin-bottom:4px"><span style="font-size:10px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.06em">'+cat+'</span></div>';
-    out+='<div class="rl" style="margin-bottom:10px">';
-    items.forEach(function(c){
-      var gi=p.comps.indexOf(c);
+    // Narrow table: checkbox | Address+postcode | £ price | £/sqft
+    out+='<table class="otbl" style="margin-bottom:10px;font-size:12px"><tr class="sub">'
+      +'<td style="width:24px;padding:5px 6px"></td>'
+      +'<td style="padding:5px 8px">Address</td>'
+      +'<td style="text-align:right;padding:5px 8px">Price</td>'
+      +'<td style="text-align:right;padding:5px 8px">£/sq ft</td>'
+    +'</tr>';
+    items.forEach(function(item){
+      var c=item.c, gi=item.gi;
       var checked=c.mapOn!==false;
-      var pr=parseInt(c.price,10)||0, ar=0, aUnit='';
-      if(c.sqft){ar=parseInt(c.sqft,10);aUnit='sq ft';}
-      else if(c.sqm){ar=parseInt(c.sqm,10);aUnit='sq m';}
-      var cPpa=pr&&ar?Math.round(pr/ar):0, ppaHtml='';
-      if(cPpa){
-        var col=sPpa&&aUnit===sUnit?(cPpa<sPpa?'var(--a)':'var(--d)'):'var(--t2)';
-        ppaHtml='<span style="font-size:11px;font-weight:600;color:'+col+'">'+C+cPpa.toLocaleString('en-GB')+'/'+aUnit+'</span>';
-      }
-      var aStr=ar?'<span style="font-size:11px;color:var(--t3)">'+ar.toLocaleString('en-GB')+'\u00a0'+aUnit+'</span>':'';
-      // Custom styled checkbox (reliable across WebKit/iOS)
+      var pr=parseInt(c.price,10)||0;
+      // Prefer sqft for ppa; convert sqm if needed
+      var ar=0;
+      if(c.sqft)ar=parseInt(c.sqft,10);
+      else if(c.sqm)ar=Math.round(parseInt(c.sqm,10)*10.764);
+      var cPpa=pr&&ar?Math.round(pr/ar):0;
+      var ppaCol=cPpa&&sPpa?(cPpa<sPpa?'var(--a)':'var(--d)'):'var(--t)';
+
+      // Checkbox cell
       var cbHtml=c.postcode
-        ?'<div data-action="toggle-comp" data-ci="'+gi+'" style="width:18px;height:18px;flex-shrink:0;margin-right:10px;margin-top:1px;border-radius:5px;border:1.5px solid '+(checked?'var(--a)':'var(--bd2)')+';background:'+(checked?'var(--a)':'transparent')+';display:flex;align-items:center;justify-content:center;cursor:pointer">'
-          +(checked?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l3 3 5-6" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')
+        ?'<div data-action="toggle-comp" data-ci="'+gi+'" style="width:16px;height:16px;border-radius:4px;border:1.5px solid '+(checked?'var(--a)':'var(--bd2)')+';background:'+(checked?'var(--a)':'transparent')+';display:flex;align-items:center;justify-content:center;cursor:pointer">'
+          +(checked?'<svg width="9" height="7" viewBox="0 0 10 8" fill="none"><path d="M1 4l3 3 5-6" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')
         +'</div>'
-        :'<div style="width:18px;flex-shrink:0;margin-right:10px"></div>';
-      out+='<div class="ri" style="flex-direction:column;align-items:flex-start;gap:4px">'
-        +'<div style="display:flex;width:100%;align-items:flex-start">'
-          +cbHtml
-          +'<div style="flex:1;min-width:0">'
-            +'<div style="display:flex;justify-content:space-between;align-items:baseline">'
-              +'<div style="flex:1;padding-right:8px">'
-                +'<span style="font-size:13px">'+esc(c.addr)+'</span>'
-                +(c.postcode?'<span style="font-size:11px;color:var(--t3);margin-left:6px">'+esc(c.postcode)+'</span>':'')
-              +'</div>'
-              +'<span style="font-size:13px;font-weight:600;white-space:nowrap">'+money(c.price)+'</span>'
-            +'</div>'
-            +(aStr||ppaHtml?'<div style="display:flex;gap:10px;margin-top:3px">'+aStr+ppaHtml+'</div>':'')
-            +((c.beds||c.outdoor||c.notes)?'<div style="font-size:11px;color:var(--t2);margin-top:3px;display:flex;gap:10px;flex-wrap:wrap">'
-              +(c.beds?'<span>'+esc(c.beds)+' bed</span>':'')
-              +(c.outdoor&&c.outdoor!=='None'?'<span>'+esc(c.outdoor)+'</span>':'')
-              +(c.notes?'<span style="color:var(--t3);font-style:italic">'+esc(c.notes)+'</span>':'')
-            +'</div>':'')
-          +'</div>'
-        +'</div>'
-      +'</div>';
+        :'<div style="width:16px"></div>';
+
+      // Address + metadata in one cell
+      var meta='';
+      if(c.beds||c.outdoor||c.notes||c.sqft||c.sqm){
+        meta='<div style="font-size:10px;color:var(--t3);margin-top:2px">';
+        if(c.beds)meta+=esc(c.beds)+' bed\u00a0';
+        if(c.sqft)meta+=esc(c.sqft)+' sq ft\u00a0';
+        else if(c.sqm)meta+=esc(c.sqm)+' sq m\u00a0';
+        if(c.outdoor&&c.outdoor!=='None')meta+=esc(c.outdoor)+'\u00a0';
+        if(c.notes)meta+='<em>'+esc(c.notes)+'</em>';
+        meta+='</div>';
+      }
+
+      out+='<tr>'
+        +'<td style="padding:6px 6px;vertical-align:top">'+cbHtml+'</td>'
+        +'<td style="padding:6px 8px;white-space:normal;color:var(--t)">'
+          +esc(c.addr)
+          +(c.postcode?'<span style="color:var(--t3);margin-left:5px;font-size:10px">'+esc(c.postcode)+'</span>':'')
+          +meta
+        +'</td>'
+        +'<td style="text-align:right;padding:6px 8px;white-space:nowrap;font-weight:600">'+money(c.price)+'</td>'
+        +'<td style="text-align:right;padding:6px 8px;white-space:nowrap;font-weight:600;color:'+ppaCol+'">'+(cPpa?C+cPpa.toLocaleString('en-GB'):'—')+'</td>'
+      +'</tr>';
     });
-    out+='</div>';
+    out+='</table>';
   });
   return out;
 }
@@ -663,7 +777,12 @@ function showList(){
   var list=props.filter(function(p){return isCur?!p.arch:p.arch});
   renderNav(isCur?'Properties':'History',
     '<div style="min-width:56px"></div>',
-    isCur?'<button class="nav-btn add" data-action="add">'+SVG.plus+'</button>':'<div style="min-width:56px"></div>'
+    isCur
+      ?'<div style="display:flex;align-items:center;gap:8px">'
+        +'<span id="gd-status" style="font-size:10px;color:var(--t3)"></span>'
+        +'<button class="nav-btn add" data-action="add">'+SVG.plus+'</button>'
+      +'</div>'
+      :'<div style="min-width:56px"></div>'
   );
   renderTabs();
   if(!list.length){
@@ -821,6 +940,21 @@ function showAssumptions(){
       +'</td></tr>';
   });
   setScr('<div style="padding:14px 16px 80px" class="fi">'
+    +sh('Google Drive sync')
+    +'<div style="font-size:12px;color:var(--t2);margin-bottom:12px;line-height:1.5">Sign in with Google to automatically save and load your property data from Google Drive. Data is stored in a private app folder only accessible to this app.</div>'
+    +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">'
+      +'<button data-action="gd-signin" style="font-size:13px;font-weight:600;color:#fff;background:#2D5F4A;border:none;border-radius:10px;padding:10px 16px;cursor:pointer;font-family:\'DM Sans\',sans-serif">Sign in with Google</button>'
+      +'<button data-action="gd-save" style="font-size:13px;color:var(--t2);background:none;border:1px solid var(--bd2);border-radius:10px;padding:9px 14px;cursor:pointer;font-family:\'DM Sans\',sans-serif">Save now</button>'
+      +'<button data-action="gd-load" style="font-size:13px;color:var(--t2);background:none;border:1px solid var(--bd2);border-radius:10px;padding:9px 14px;cursor:pointer;font-family:\'DM Sans\',sans-serif">Load from Drive</button>'
+    +'</div>'
+    +'<div id="gd-status" style="font-size:12px;color:var(--a);margin-bottom:20px"></div>'
+    +'<div class="ic" style="margin-bottom:16px"><p style="font-size:12px;line-height:1.6"><strong>Setup required (one time):</strong><br>'
+      +'1. Go to <a href="https://console.cloud.google.com" target="_blank" style="color:var(--a)">console.cloud.google.com</a><br>'
+      +'2. Create a project → Enable Drive API → Create OAuth 2.0 Client ID (Web application)<br>'
+      +'3. Add your file\'s URL to Authorised JavaScript origins<br>'
+      +'4. Replace <code>YOUR_GOOGLE_CLIENT_ID</code> in the script with your Client ID<br>'
+      +'5. For GitHub hosting: push this file to a repo and enable GitHub Pages</p>'
+    +'</div>'
     +sh('Stamp duty rates')
     +'<div style="font-size:12px;color:var(--t2);margin-bottom:12px;line-height:1.5">Additional property / buy-to-let rates (incl. 3% surcharge). Edit any rate — it applies to all future calculations.</div>'
     +'<table class="otbl" style="margin-bottom:16px">'
@@ -887,14 +1021,15 @@ function renderForm(){
   var CCATS=['For Sale','Sold','Auctioned','Sold at auction'];
   var ch='';
   CCATS.forEach(function(cat){
-    var items=(f.comps||[]).filter(function(c){return c.cat===cat});
     ch+='<div style="margin-bottom:10px">'
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
         +'<span style="font-size:10px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.06em">'+cat+'</span>'
         +'<button class="btn-add m" style="margin-top:0;font-size:12px" data-action="ac" data-cat="'+cat+'"><span style="font-size:16px;line-height:1;color:var(--t3)">+</span> Add</button>'
       +'</div>';
-    items.forEach(function(c){
-      var gi=(f.comps||[]).indexOf(c);
+    var found=false;
+    (f.comps||[]).forEach(function(c,gi){
+      if(c.cat!==cat)return;
+      found=true;
       ch+='<div style="background:var(--sf);border:1px solid var(--bd);border-radius:12px;padding:10px;margin-bottom:8px">'
         +'<div class="flr" style="margin-bottom:8px">'
           +'<input class="g" type="text" data-f="comp-addr" data-i="'+gi+'" value="'+esc(c.addr)+'" placeholder="Address / description">'
@@ -913,7 +1048,7 @@ function renderForm(){
         +'<div class="fg" style="margin-bottom:0"><label class="fl" style="font-size:10px">Notes</label><input type="text" data-f="comp-notes" data-i="'+gi+'" value="'+esc(c.notes||'')+'" placeholder="e.g. top floor, period features"></div>'
       +'</div>';
     });
-    if(!items.length)ch+='<div style="font-size:12px;color:var(--t3);padding:4px 0 6px">No '+cat.toLowerCase()+' comparables added</div>';
+    if(!found)ch+='<div style="font-size:12px;color:var(--t3);padding:4px 0 6px">No '+cat.toLowerCase()+' comparables added</div>';
     ch+='</div>';
   });
 
@@ -1061,6 +1196,9 @@ document.addEventListener('click',function(e){
   if(a==='list')   {showList();return;}
   if(a==='save')   {doSave();return;}
   if(a==='archive'){doArchive(id);return;}
+  if(a==='gd-signin'){gdSignIn();return;}
+  if(a==='gd-save')  {gdSave();return;}
+  if(a==='gd-load')  {gdLoad();return;}
   if(a==='reset-sd'){SDSLABS[0].r=3;SDSLABS[1].r=5;SDSLABS[2].r=8;SDSLABS[3].r=13;SDSLABS[4].r=15;showAssumptions();return;}
   if(a==='reset-vat'){VAT_RATE=20;showAssumptions();return;}
 
@@ -1277,6 +1415,9 @@ document.addEventListener('change',function(e){
 
 // ─── Boot ─────────────────────────────────────────────────────
 props=load();
+// Restore Google Drive token if previously signed in
+var _savedToken=localStorage.getItem('gd_token');
+if(_savedToken){gdToken=_savedToken;}
 showList();
 </script>
 </body>
