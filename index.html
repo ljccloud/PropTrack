@@ -136,15 +136,15 @@ select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/
 <script>
 // ─── Google Drive Sync ───────────────────────────────────────
 // Replace with your own OAuth Client ID from console.cloud.google.com
-var GD_CLIENT_ID='YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com';
+var GD_CLIENT_ID='1065345957998-mtfsrdag00njob3eeqiut3bvtrj80d31.apps.googleusercontent.com';
 var GD_SCOPE='https://www.googleapis.com/auth/drive.appdata';
 var GD_FILE_NAME='property-tracker-data.json';
 var gdToken=null;
 var gdFileId=null; // cached Drive file ID
 
 function gdSignIn(){
-  if(!window.google||!GD_CLIENT_ID||GD_CLIENT_ID.includes('YOUR_')){
-    alert('To enable Google Drive sync, replace GD_CLIENT_ID in the script with your OAuth Client ID from console.cloud.google.com');
+  if(!window.google){
+    alert('Google Identity Services script not yet loaded. Please check your internet connection.');
     return;
   }
   var client=google.accounts.oauth2.initTokenClient({
@@ -952,7 +952,7 @@ function showAssumptions(){
       +'1. Go to <a href="https://console.cloud.google.com" target="_blank" style="color:var(--a)">console.cloud.google.com</a><br>'
       +'2. Create a project → Enable Drive API → Create OAuth 2.0 Client ID (Web application)<br>'
       +'3. Add your file\'s URL to Authorised JavaScript origins<br>'
-      +'4. Replace <code>YOUR_GOOGLE_CLIENT_ID</code> in the script with your Client ID<br>'
+      +'4. Your Client ID is already configured in this file<br>'
       +'5. For GitHub hosting: push this file to a repo and enable GitHub Pages</p>'
     +'</div>'
     +sh('Stamp duty rates')
