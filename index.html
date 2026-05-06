@@ -243,11 +243,11 @@ var C='£', form={}, props=[], tab='current', screen='list', vid=null, eid=null;
 
 // ─── Stamp duty bands (editable on Assumptions screen) ───────
 var SDSLABS=[
-  {label:'Up to £125,000',      to:125000,  r:3},
-  {label:'£125,001–£250,000',   to:250000,  r:5},
-  {label:'£250,001–£925,000',   to:925000,  r:8},
-  {label:'£925,001–£1,500,000', to:1500000, r:13},
-  {label:'Above £1,500,000',    to:Infinity,r:15}
+  {label:'Up to £125,000',      to:125000,  r:5},
+  {label:'£125,001–£250,000',   to:250000,  r:7},
+  {label:'£250,001–£925,000',   to:925000,  r:10},
+  {label:'£925,001–£1,500,000', to:1500000, r:15},
+  {label:'Above £1,500,000',    to:Infinity,r:17}
 ];
 
 // VAT rate assumption (editable on Assumptions screen)
@@ -956,7 +956,7 @@ function showAssumptions(){
       +'5. For GitHub hosting: push this file to a repo and enable GitHub Pages</p>'
     +'</div>'
     +sh('Stamp duty rates')
-    +'<div style="font-size:12px;color:var(--t2);margin-bottom:12px;line-height:1.5">Additional property / buy-to-let rates (incl. 3% surcharge). Edit any rate — it applies to all future calculations.</div>'
+    +'<div style="font-size:12px;color:var(--t2);margin-bottom:12px;line-height:1.5">Additional property / buy-to-let rates from October 2024 (starting at 5%). Edit any rate — it applies to all future calculations.</div>'
     +'<table class="otbl" style="margin-bottom:16px">'
       +'<tr class="sub"><td>Band</td><td style="text-align:right">Rate</td></tr>'
       +rows
@@ -1199,7 +1199,7 @@ document.addEventListener('click',function(e){
   if(a==='gd-signin'){gdSignIn();return;}
   if(a==='gd-save')  {gdSave();return;}
   if(a==='gd-load')  {gdLoad();return;}
-  if(a==='reset-sd'){SDSLABS[0].r=3;SDSLABS[1].r=5;SDSLABS[2].r=8;SDSLABS[3].r=13;SDSLABS[4].r=15;showAssumptions();return;}
+  if(a==='reset-sd'){SDSLABS[0].r=5;SDSLABS[1].r=7;SDSLABS[2].r=10;SDSLABS[3].r=15;SDSLABS[4].r=17;showAssumptions();return;}
   if(a==='reset-vat'){VAT_RATE=20;showAssumptions();return;}
 
   // Form — renos
