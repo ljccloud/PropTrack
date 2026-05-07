@@ -1193,6 +1193,7 @@ document.addEventListener('click',function(e){
     if(ci!=null)toggleCompMap(ci);
     return;
   }
+  if(a==='add')    {goAdd();return;}
   if(a==='view')   {goView(id);return;}
   if(a==='edit')   {goEdit(id);return;}
   if(a==='list')   {showList();return;}
