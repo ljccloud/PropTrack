@@ -132,109 +132,109 @@ select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/
   <div id="tabs" class="tab-bar"></div>
 </div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://accounts.google.com/gsi/client" async></script>
+<script src="https://accounts.google.com/gsi/client"></script>
 <script>
-// ─── Google Drive Sync ───────────────────────────────────────
-// Replace with your own OAuth Client ID from console.cloud.google.com
+// ─── Google Drive Sync ────────────────────────────────────────
 var GD_CLIENT_ID='1065345957998-mtfsrdag00njob3eeqiut3bvtrj80d31.apps.googleusercontent.com';
 var GD_SCOPE='https://www.googleapis.com/auth/drive.appdata';
-var GD_FILE_NAME='property-tracker-data.json';
+var GD_FILE='property-tracker-v1.json';
 var gdToken=null;
-var gdFileId=null; // cached Drive file ID
+var gdFileId=null;
 
-function gdSignIn(){
-  if(!window.google){
-    alert('Google Identity Services script not yet loaded. Please check your internet connection.');
+// Show status message in both possible status elements
+function gdStatus(msg,err){
+  ['gd-status','gd-status-2'].forEach(function(id){
+    var el=document.getElementById(id);
+    if(el){el.textContent=msg;el.style.color=err?'var(--d)':'var(--a)';}
+  });
+}
+
+// Request a fresh token — never use cached tokens, Google tokens expire in 1hr
+function gdSignIn(cb){
+  if(typeof google==='undefined'){
+    gdStatus('Google script not loaded — check internet connection',true);
     return;
   }
   var client=google.accounts.oauth2.initTokenClient({
     client_id:GD_CLIENT_ID,
     scope:GD_SCOPE,
     callback:function(resp){
-      if(resp.error){console.error('GDrive auth error',resp);return;}
+      if(resp.error||!resp.access_token){
+        gdStatus('Sign-in failed: '+(resp.error||'no token'),true);
+        console.error('GDrive sign-in error',resp);
+        return;
+      }
       gdToken=resp.access_token;
-      localStorage.setItem('gd_token',gdToken);
-      gdSyncStatus('Signed in \u2713');
-      gdLoad();
+      gdFileId=null; // reset file cache on new token
+      gdStatus('Signed in \u2713');
+      if(cb)cb();
     }
   });
-  client.requestAccessToken();
+  client.requestAccessToken({prompt:'consent'});
 }
 
-function gdSyncStatus(msg,isErr){
-  var el=document.getElementById('gd-status');
-  if(el){el.textContent=msg;el.style.color=isErr?'var(--d)':'var(--a)';}
+function gdAuthThenRun(fn){
+  // Always get a fresh token — don't rely on cached ones
+  gdSignIn(fn);
 }
 
-function gdFetch(method,url,body,cb){
-  var opts={method:method,headers:{Authorization:'Bearer '+gdToken,'Content-Type':'application/json'}};
-  if(body)opts.body=JSON.stringify(body);
-  fetch(url,opts).then(function(r){return r.ok?r.json():r.json().then(function(e){throw e;});}).then(cb).catch(function(e){
-    gdSyncStatus('Sync error: '+(e.error&&e.error.message||'unknown'),true);
-    console.error('GDrive error',e);
+function gdApiFetch(method,url,headers,body){
+  var h=Object.assign({'Authorization':'Bearer '+gdToken},headers||{});
+  return fetch(url,{method:method,headers:h,body:body}).then(function(r){
+    if(r.status===401){gdToken=null;gdStatus('Session expired — please sign in again',true);return null;}
+    if(!r.ok)return r.text().then(function(t){throw new Error(r.status+' '+t);});
+    var ct=r.headers.get('content-type')||'';
+    return ct.includes('json')?r.json():r.text();
   });
 }
 
-function gdFindFile(cb){
-  if(gdFileId){cb(gdFileId);return;}
-  var q=encodeURIComponent("name='"+GD_FILE_NAME+"' and 'appDataFolder' in parents and trashed=false");
-  fetch('https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q='+q+'&fields=files(id)',{headers:{Authorization:'Bearer '+gdToken}})
-    .then(function(r){return r.json();})
+function gdFindOrCreateFile(cb){
+  var q='name=%27'+encodeURIComponent(GD_FILE)+'%27+and+%27appDataFolder%27+in+parents+and+trashed%3Dfalse';
+  gdApiFetch('GET','https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q='+q+'&fields=files(id,name)')
     .then(function(d){
-      gdFileId=(d.files&&d.files.length)?d.files[0].id:null;
-      cb(gdFileId);
-    });
+      if(!d)return;
+      if(d.files&&d.files.length){gdFileId=d.files[0].id;cb(gdFileId,false);return;}
+      // Create file
+      gdApiFetch('POST','https://www.googleapis.com/drive/v3/files',{'Content-Type':'application/json'},
+        JSON.stringify({name:GD_FILE,parents:['appDataFolder'],mimeType:'application/json'}))
+        .then(function(f){if(f){gdFileId=f.id;cb(f.id,true);}});
+    })
+    .catch(function(e){gdStatus('Drive error: '+e.message,true);console.error(e);});
 }
 
-function gdSave(){
-  if(!gdToken){gdSyncStatus('Sign in to sync');return;}
+function gdSaveNow(){
+  if(!gdToken){gdAuthThenRun(gdSaveNow);return;}
+  gdStatus('Saving\u2026');
   var data=JSON.stringify(props);
-  gdFindFile(function(fid){
-    if(fid){
-      // Update existing file
-      fetch('https://www.googleapis.com/upload/drive/v3/files/'+fid+'?uploadType=media',{
-        method:'PATCH',
-        headers:{Authorization:'Bearer '+gdToken,'Content-Type':'application/json'},
-        body:data
-      }).then(function(){gdSyncStatus('Saved to Drive \u2713');}).catch(function(e){gdSyncStatus('Save failed',true);});
-    } else {
-      // Create new file in appDataFolder
-      var meta={name:GD_FILE_NAME,parents:['appDataFolder']};
-      gdFetch('POST','https://www.googleapis.com/drive/v3/files',meta,function(f){
-        gdFileId=f.id;
-        fetch('https://www.googleapis.com/upload/drive/v3/files/'+f.id+'?uploadType=media',{
-          method:'PATCH',
-          headers:{Authorization:'Bearer '+gdToken,'Content-Type':'application/json'},
-          body:data
-        }).then(function(){gdSyncStatus('Saved to Drive \u2713');});
-      });
-    }
+  gdFindOrCreateFile(function(fid){
+    gdApiFetch('PATCH',
+      'https://www.googleapis.com/upload/drive/v3/files/'+fid+'?uploadType=media',
+      {'Content-Type':'application/json'},
+      data)
+      .then(function(r){if(r!==null)gdStatus('Saved to Drive \u2713');})
+      .catch(function(e){gdStatus('Save failed: '+e.message,true);console.error(e);});
   });
 }
 
-function gdLoad(){
-  if(!gdToken)return;
-  gdSyncStatus('Loading from Drive\u2026');
-  gdFindFile(function(fid){
-    if(!fid){gdSyncStatus('No Drive data yet — will save on next change');return;}
-    fetch('https://www.googleapis.com/drive/v3/files/'+fid+'?alt=media',{headers:{Authorization:'Bearer '+gdToken}})
-      .then(function(r){return r.json();})
+function gdLoadNow(){
+  if(!gdToken){gdAuthThenRun(gdLoadNow);return;}
+  gdStatus('Loading from Drive\u2026');
+  gdFindOrCreateFile(function(fid,created){
+    if(created){gdStatus('New Drive file created — save your data to sync');return;}
+    gdApiFetch('GET','https://www.googleapis.com/drive/v3/files/'+fid+'?alt=media')
       .then(function(data){
-        if(Array.isArray(data)){
-          props=data.map(migrate);
-          gdSyncStatus('Loaded from Drive \u2713');
-          if(screen==='list')showList();
-          else showAnalysis();
+        if(data===null)return;
+        var parsed=typeof data==='string'?JSON.parse(data):data;
+        if(Array.isArray(parsed)&&parsed.length){
+          props=parsed.map(migrate);
+          gdStatus('Loaded from Drive \u2713');
+          if(typeof showList==='function')showList();
+        } else {
+          gdStatus('Drive file empty — will save on next change');
         }
-      }).catch(function(){gdSyncStatus('Load failed',true);});
+      })
+      .catch(function(e){gdStatus('Load failed: '+e.message,true);console.error(e);});
   });
-}
-
-// Override save() to also push to Drive
-var _localSave=save;
-function save(){
-  _localSave();
-  if(gdToken)gdSave();
 }
 </script>
 <script>
@@ -353,6 +353,8 @@ function load(){
 
 function save(){
   try{localStorage.setItem('pt3',JSON.stringify(props));}catch(e){}
+  // Push to Google Drive if signed in
+  if(typeof gdSaveNow==='function'&&gdToken)gdSaveNow();
 }
 
 // ─── Utilities ───────────────────────────────────────────────
@@ -947,7 +949,7 @@ function showAssumptions(){
       +'<button data-action="gd-save" style="font-size:13px;color:var(--t2);background:none;border:1px solid var(--bd2);border-radius:10px;padding:9px 14px;cursor:pointer;font-family:\'DM Sans\',sans-serif">Save now</button>'
       +'<button data-action="gd-load" style="font-size:13px;color:var(--t2);background:none;border:1px solid var(--bd2);border-radius:10px;padding:9px 14px;cursor:pointer;font-family:\'DM Sans\',sans-serif">Load from Drive</button>'
     +'</div>'
-    +'<div id="gd-status" style="font-size:12px;color:var(--a);margin-bottom:20px"></div>'
+    +'<div id="gd-status-2" style="font-size:12px;color:var(--a);margin-bottom:20px"></div>'
     +'<div class="ic" style="margin-bottom:16px"><p style="font-size:12px;line-height:1.6"><strong>Setup required (one time):</strong><br>'
       +'1. Go to <a href="https://console.cloud.google.com" target="_blank" style="color:var(--a)">console.cloud.google.com</a><br>'
       +'2. Create a project → Enable Drive API → Create OAuth 2.0 Client ID (Web application)<br>'
@@ -1196,9 +1198,9 @@ document.addEventListener('click',function(e){
   if(a==='list')   {showList();return;}
   if(a==='save')   {doSave();return;}
   if(a==='archive'){doArchive(id);return;}
-  if(a==='gd-signin'){gdSignIn();return;}
-  if(a==='gd-save')  {gdSave();return;}
-  if(a==='gd-load')  {gdLoad();return;}
+  if(a==='gd-signin'){gdSignIn(null);return;}
+  if(a==='gd-save')  {gdSaveNow();return;}
+  if(a==='gd-load')  {gdLoadNow();return;}
   if(a==='reset-sd'){SDSLABS[0].r=5;SDSLABS[1].r=7;SDSLABS[2].r=10;SDSLABS[3].r=15;SDSLABS[4].r=17;showAssumptions();return;}
   if(a==='reset-vat'){VAT_RATE=20;showAssumptions();return;}
 
@@ -1415,9 +1417,6 @@ document.addEventListener('change',function(e){
 
 // ─── Boot ─────────────────────────────────────────────────────
 props=load();
-// Restore Google Drive token if previously signed in
-var _savedToken=localStorage.getItem('gd_token');
-if(_savedToken){gdToken=_savedToken;}
 showList();
 </script>
 </body>
