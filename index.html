@@ -136,10 +136,12 @@ select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/
 <script>
 // ─── Google Drive Sync ────────────────────────────────────────
 var GD_CLIENT_ID='1065345957998-mtfsrdag00njob3eeqiut3bvtrj80d31.apps.googleusercontent.com';
-var GD_SCOPE='https://www.googleapis.com/auth/drive.appdata';
+var GD_SCOPE='https://www.googleapis.com/auth/drive.file';
+var GD_FOLDER='PropResearch';
 var GD_FILE='property-tracker-v1.json';
 var gdToken=null;
 var gdFileId=null;
+var gdFolderId=null;
 
 // Show status message in both possible status elements
 function gdStatus(msg,err){
@@ -165,7 +167,8 @@ function gdSignIn(cb){
         return;
       }
       gdToken=resp.access_token;
-      gdFileId=null; // reset file cache on new token
+      gdFileId=null;   // reset file cache on new token
+      gdFolderId=null; // reset folder cache on new token
       gdStatus('Signed in \u2713');
       if(cb)cb();
     }
@@ -188,18 +191,38 @@ function gdApiFetch(method,url,headers,body){
   });
 }
 
-function gdFindOrCreateFile(cb){
-  var q='name=%27'+encodeURIComponent(GD_FILE)+'%27+and+%27appDataFolder%27+in+parents+and+trashed%3Dfalse';
-  gdApiFetch('GET','https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q='+q+'&fields=files(id,name)')
+function gdFindOrCreateFolder(cb){
+  if(gdFolderId){cb(gdFolderId);return;}
+  var q="mimeType='application/vnd.google-apps.folder' and name='"+GD_FOLDER+"' and trashed=false";
+  gdApiFetch('GET','https://www.googleapis.com/drive/v3/files?q='+encodeURIComponent(q)+'&fields=files(id,name)')
     .then(function(d){
       if(!d)return;
-      if(d.files&&d.files.length){gdFileId=d.files[0].id;cb(gdFileId,false);return;}
-      // Create file
-      gdApiFetch('POST','https://www.googleapis.com/drive/v3/files',{'Content-Type':'application/json'},
-        JSON.stringify({name:GD_FILE,parents:['appDataFolder'],mimeType:'application/json'}))
-        .then(function(f){if(f){gdFileId=f.id;cb(f.id,true);}});
+      if(d.files&&d.files.length){gdFolderId=d.files[0].id;cb(gdFolderId);return;}
+      // Create the folder
+      gdApiFetch('POST','https://www.googleapis.com/drive/v3/files',
+        {'Content-Type':'application/json'},
+        JSON.stringify({name:GD_FOLDER,mimeType:'application/vnd.google-apps.folder'}))
+        .then(function(f){if(f){gdFolderId=f.id;cb(f.id);}});
     })
-    .catch(function(e){gdStatus('Drive error: '+e.message,true);console.error(e);});
+    .catch(function(e){gdStatus('Folder error: '+e.message,true);console.error(e);});
+}
+
+function gdFindOrCreateFile(cb){
+  gdFindOrCreateFolder(function(folderId){
+    if(!folderId)return;
+    var q="name='"+GD_FILE+"' and '"+folderId+"' in parents and trashed=false";
+    gdApiFetch('GET','https://www.googleapis.com/drive/v3/files?q='+encodeURIComponent(q)+'&fields=files(id,name)')
+      .then(function(d){
+        if(!d)return;
+        if(d.files&&d.files.length){gdFileId=d.files[0].id;cb(gdFileId,false);return;}
+        // Create file inside folder
+        gdApiFetch('POST','https://www.googleapis.com/drive/v3/files',
+          {'Content-Type':'application/json'},
+          JSON.stringify({name:GD_FILE,parents:[folderId],mimeType:'application/json'}))
+          .then(function(f){if(f){gdFileId=f.id;cb(f.id,true);}});
+      })
+      .catch(function(e){gdStatus('File error: '+e.message,true);console.error(e);});
+  });
 }
 
 function gdSaveNow(){
