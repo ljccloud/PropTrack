@@ -471,8 +471,8 @@ function offerHtml(p){
   // Seed from table totals only when field is still empty
   var rv=renoOfferValue(p), ft=ftotal(p.fees);
   var fc=calcFinancing(p).finCost;
-  if(rv&&!o.reno)    o.reno=String(rv);
-  if(ft&&!o.fees)    o.fees=String(ft);
+  if(rv&&!o.reno)      o.reno=String(rv);
+  if(ft&&!o.fees)      o.fees=String(ft);
   if(fc&&!o.financing) o.financing=String(fc);
 
   var op=parseInt(o.offerPrice,10)||0;
@@ -481,35 +481,86 @@ function offerHtml(p){
   var fi=parseInt(o.financing,10)||0;
   var rs=parseInt(o.resale,10)||0;
   var tc=op+fe+re+fi;
+  var tcNoFi=op+fe+re;       // total before financing
   var pr=rs&&tc?rs-tc:null;
+  var prNoFi=rs&&tcNoFi?rs-tcNoFi:null;
   var pc=pr===null?'var(--t2)':pr>=0?'var(--a)':'var(--d)';
+  var pcNoFi=prNoFi===null?'var(--t2)':prNoFi>=0?'var(--a)':'var(--d)';
 
-  var irow=function(label,field,val,xid){
-    return'<tr><td>'+label+'</td><td>£&thinsp;<input type="number" class="oi" data-of="'+field+'"'+(xid?' id="'+xid+'"':'')+' value="'+esc(val||'')+'" placeholder="\u2014"></td></tr>';
+  // Area for £/sqft calc
+  var ar=parseInt(p.area,10)||0;
+  var arSqft=p.unit==='sq ft'?ar:(ar?Math.round(ar*10.764):0);
+
+  function ppaCell(amount,id){
+    var v=amount&&arSqft?Math.round(amount/arSqft):0;
+    return'<td id="'+(id||'')+'" style="text-align:right;font-size:10px;color:var(--t3);white-space:nowrap;padding-right:6px">'+(v?C+v.toLocaleString('en-GB')+'/ft':'\u2014')+'</td>';
+  }
+
+  var irow=function(label,field,val,xid,showPpa,ppaN){
+    var ppaVal=showPpa&&val&&arSqft?Math.round(parseInt(val,10)/arSqft):0;
+    // Column order: label | £/sqft | amount
+    return'<tr><td>'+label+'</td>'
+      +(showPpa?'<td id="'+(ppaN||'')+'" style="text-align:right;font-size:10px;color:var(--t3);white-space:nowrap;padding-right:6px">'+(ppaVal?C+ppaVal.toLocaleString('en-GB')+'/ft':'\u2014')+'</td>':'<td></td>')
+      +'<td>£&thinsp;<input type="number" class="oi" data-of="'+field+'"'+(xid?' id="'+xid+'"':'')+' value="'+esc(val||'')+'" placeholder="\u2014"></td>'
+    +'</tr>';
   };
+
+  // Profit: only show when resale entered; positive or negative
+  var pr    = rs ? rs - tc     : null;
+  var prNoFi= rs ? rs - tcNoFi : null;
+  var pc    =pr===null?'var(--t2)':pr>=0?'var(--a)':'var(--d)';
+  var pcNoFi=prNoFi===null?'var(--t2)':prNoFi>=0?'var(--a)':'var(--d)';
+
   return'<div id="offer-sec">'+sh('Offer considerations')
     +'<table class="otbl">'
-      +irow('Offer price',      'offerPrice',o.offerPrice)
-      +irow('Purchase fees',    'fees',      o.fees,  'offer-fees-inp')
-      +irow('Renovation cost',  'reno',      o.reno,  'offer-reno-inp')
-      +irow('Financing charges','financing', o.financing,'offer-fin-inp')
-      +'<tr class="sub"><td>Total cost</td><td id="offer-tc">'+(tc?C+tc.toLocaleString('en-GB'):'')+'</td></tr>'
-      +irow('Potential resale', 'resale',    o.resale)
-      +'<tr class="profit"><td>Potential profit</td><td id="offer-pr" style="color:'+pc+'">'+(pr!==null?(pr>=0?'+':'')+C+Math.abs(pr).toLocaleString('en-GB'):'')+'</td></tr>'
+      +'<tr class="sub"><td></td><td style="text-align:right;font-size:10px">£/sq ft</td><td style="text-align:right">Amount</td></tr>'
+      +irow('Offer price',      'offerPrice',o.offerPrice,'',    true,'offer-op-ppa')
+      +irow('Purchase fees',    'fees',      o.fees,  'offer-fees-inp',false)
+      +irow('Renovation cost',  'reno',      o.reno,  'offer-reno-inp',false)
+      +irow('Financing charges','financing', o.financing,'offer-fin-inp',false)
+      +'<tr class="sub"><td>Total cost</td>'
+        +'<td id="offer-tc-ppa" style="text-align:right;font-size:10px;color:var(--t3);white-space:nowrap;padding-right:6px">'+(tc&&arSqft?C+Math.round(tc/arSqft).toLocaleString('en-GB')+'/ft':'\u2014')+'</td>'
+        +'<td id="offer-tc">'+(tc?C+tc.toLocaleString('en-GB'):'')+'</td>'
+      +'</tr>'
+      +irow('Potential resale', 'resale',    o.resale,'',false)
+      +'<tr class="profit"><td>Profit before financing</td><td></td><td id="offer-pr-nofi" style="color:'+pcNoFi+'">'+(prNoFi!==null?(prNoFi>=0?'+':'')+C+Math.abs(prNoFi).toLocaleString('en-GB'):'')+'</td></tr>'
+      +'<tr class="profit"><td>Potential profit</td><td></td><td id="offer-pr" style="color:'+pc+'">'+(pr!==null?(pr>=0?'+':'')+C+Math.abs(pr).toLocaleString('en-GB'):'')+'</td></tr>'
     +'</table></div>';
 }
 
 // Refresh offer summary cells without re-rendering inputs
 function refreshOfferCells(p){
   var o=p.offer||{};
-  var tc=(parseInt(o.offerPrice,10)||0)+(parseInt(o.fees,10)||0)+(parseInt(o.reno,10)||0)+(parseInt(o.financing,10)||0);
+  var op=parseInt(o.offerPrice,10)||0;
+  var fe=parseInt(o.fees,10)||0;
+  var re=parseInt(o.reno,10)||0;
+  var fi=parseInt(o.financing,10)||0;
   var rs=parseInt(o.resale,10)||0;
+  var tc=op+fe+re+fi;
+  var tcNoFi=op+fe+re;
   var pr=rs&&tc?rs-tc:null;
-  var tcEl=$('offer-tc'),prEl=$('offer-pr');
-  if(tcEl)tcEl.textContent=tc?C+tc.toLocaleString('en-GB'):'';
+  var prNoFi=rs&&tcNoFi?rs-tcNoFi:null;
+
+  // Area for £/sqft
+  var ar=parseInt(p.area,10)||0;
+  var arSqft=p.unit==='sq ft'?ar:(ar?Math.round(ar*10.764):0);
+  function ppa(v){return(v&&arSqft)?C+Math.round(v/arSqft).toLocaleString('en-GB')+'/ft':'\u2014';}
+
+  var tcEl=$('offer-tc'),tcPpaEl=$('offer-tc-ppa');
+  var prEl=$('offer-pr'),prNoFiEl=$('offer-pr-nofi');
+  var opPpaEl=$('offer-op-ppa');
+
+  if(tcEl)   tcEl.textContent=tc?C+tc.toLocaleString('en-GB'):'';
+  if(tcPpaEl)tcPpaEl.textContent=ppa(tc);
+  if(opPpaEl)opPpaEl.textContent=ppa(op);
+
   if(prEl){
     prEl.textContent=pr!==null?(pr>=0?'+':'')+C+Math.abs(pr).toLocaleString('en-GB'):'';
     prEl.style.color=pr===null?'var(--t2)':pr>=0?'var(--a)':'var(--d)';
+  }
+  if(prNoFiEl){
+    prNoFiEl.textContent=prNoFi!==null?(prNoFi>=0?'+':'')+C+Math.abs(prNoFi).toLocaleString('en-GB'):'';
+    prNoFiEl.style.color=prNoFi===null?'var(--t2)':prNoFi>=0?'var(--a)':'var(--d)';
   }
 }
 
