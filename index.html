@@ -685,7 +685,53 @@ function buildCompsHtml(p){
   var subjectPc=getSubjectPc(p);
   var showMap=subjectPc||p.comps.some(function(c){return c.postcode&&c.postcode.trim();});
 
-  var out=sh('Comparables');
+  // Subject area in sq ft for implied offer price calculations
+  var ar=parseInt(p.area,10)||0;
+  var arSqft=ar?(p.unit==='sq ft'?ar:Math.round(ar*10.764)):0;
+
+  // ── Summary: High/Med/Low £/sqft per category (ticked comps only) ──
+  var SUM_CATS=['For Sale','Sold','Sold at auction'];
+  var catPpas={};
+  SUM_CATS.forEach(function(cat){catPpas[cat]=[];});
+  p.comps.forEach(function(c){
+    if(c.mapOn===false||!catPpas[c.cat])return;
+    var pr=parseInt(c.price,10)||0;
+    var cAr=c.sqft?parseInt(c.sqft,10):(c.sqm?Math.round(parseInt(c.sqm,10)*10.764):0);
+    if(pr&&cAr)catPpas[c.cat].push(Math.round(pr/cAr));
+  });
+  var hasData=SUM_CATS.some(function(cat){return catPpas[cat].length;});
+  var summaryHtml='';
+  if(hasData){
+    function hiVal(a){return a.length?Math.max.apply(null,a):null;}
+    function loVal(a){return a.length?Math.min.apply(null,a):null;}
+    function medVal(a){
+      if(!a.length)return null;
+      var s=a.slice().sort(function(x,y){return x-y;});
+      var m=Math.floor(s.length/2);
+      return s.length%2?s[m]:Math.round((s[m-1]+s[m])/2);
+    }
+    function cell(ppa){
+      if(ppa===null)return'<td style="text-align:right;padding:5px 6px"><span style="color:var(--t3)">—</span></td>';
+      var implied=arSqft?'<div style="font-size:10px;color:var(--t3)">'+C+Math.round(ppa*arSqft).toLocaleString('en-GB')+'</div>':'';
+      return'<td style="text-align:right;padding:5px 6px"><span style="font-weight:600">'+C+ppa.toLocaleString('en-GB')+'</span>'+implied+'</td>';
+    }
+    summaryHtml='<div style="margin-bottom:14px">'
+      +'<div style="font-size:10px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Market summary — ticked comparables</div>'
+      +'<table class="otbl" style="font-size:12px;width:100%">'
+        +'<tr class="sub"><td style="padding:5px 8px"></td>'
+          +SUM_CATS.map(function(cat){return'<td style="text-align:right;padding:5px 6px;font-size:11px">'+cat+'</td>';}).join('')
+        +'</tr>'
+        +[['High',hiVal],['Mid',medVal],['Low',loVal]].map(function(row){
+          return'<tr><td style="font-size:11px;color:var(--t2);padding:5px 8px">'+row[0]+'<div style="font-size:9px;color:var(--t3)">£/sq ft</div></td>'
+            +SUM_CATS.map(function(cat){return cell(row[1](catPpas[cat]));}).join('')
+          +'</tr>';
+        }).join('')
+      +'</table>'
+      +(arSqft?'<div style="font-size:10px;color:var(--t3);margin-top:5px">Implied offer prices based on '+arSqft.toLocaleString('en-GB')+' sq ft</div>':'')
+    +'</div>';
+  }
+
+  var out=sh('Comparables')+summaryHtml;
   if(showMap)out+='<div id="comp-map"></div>';
 
   COMP_CATS.forEach(function(cat){
@@ -1469,6 +1515,7 @@ document.addEventListener('input',function(e){
   else if(f==='comp-beds'    &&i!=null&&form.comps[i]) form.comps[i].beds=val;
   else if(f==='comp-outdoor' &&i!=null&&form.comps[i]) form.comps[i].outdoor=val;
   else if(f==='comp-notes'   &&i!=null&&form.comps[i]) form.comps[i].notes=val;
+  else if(f==='comp-date'    &&i!=null&&form.comps[i]) form.comps[i].dateSold=val;
   else if(f==='comp-sqft' &&i!=null&&form.comps[i]){form.comps[i].sqft=val;if(val)form.comps[i].sqm='';}
   else if(f==='comp-sqm'  &&i!=null&&form.comps[i]){form.comps[i].sqm=val;if(val)form.comps[i].sqft='';}
 });
@@ -1485,6 +1532,7 @@ document.addEventListener('change',function(e){
   else if(f==='comp-sqft'&&i!=null&&form.comps[i]){form.comps[i].sqft=val;if(val)form.comps[i].sqm='';}
   else if(f==='comp-sqm' &&i!=null&&form.comps[i]){form.comps[i].sqm=val;if(val)form.comps[i].sqft='';}
   else if(f==='comp-outdoor'&&i!=null&&form.comps[i])form.comps[i].outdoor=val;
+  else if(f==='comp-date'   &&i!=null&&form.comps[i])form.comps[i].dateSold=val;
 });
 
 // ─── Boot ─────────────────────────────────────────────────────
