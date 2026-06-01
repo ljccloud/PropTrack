@@ -119,6 +119,14 @@ select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/
 @media(min-width:600px){.mg{grid-template-columns:repeat(4,1fr)}}
 @keyframes fu{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
 .fi{animation:fu .2s ease both}
+/* Comp postcode autocomplete */
+.pc-wrap{position:relative}
+.pc-drop{position:absolute;top:100%;left:0;right:0;background:var(--sf);border:1px solid var(--bd2);border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.12);z-index:500;max-height:180px;overflow-y:auto;margin-top:3px}
+.pc-item{padding:9px 12px;font-size:12px;cursor:pointer;border-bottom:1px solid var(--bd)}
+.pc-item:last-child{border-bottom:none}
+.pc-item:active{background:var(--sf2)}
+.pc-item-main{font-weight:500;color:var(--t)}
+.pc-item-sub{font-size:10px;color:var(--t3);margin-top:1px}
 /* Comparables map */
 #comp-map{height:220px;border-radius:14px;overflow:hidden;border:1px solid var(--bd);margin-bottom:14px}
 .comp-popup{font-family:'DM Sans',sans-serif;font-size:12px;line-height:1.5}
@@ -248,13 +256,20 @@ function gdLoadNow(){
       .then(function(data){
         if(data===null)return;
         var parsed=typeof data==='string'?JSON.parse(data):data;
-        if(Array.isArray(parsed)&&parsed.length){
-          props=parsed.map(migrate);
-          gdStatus('Loaded from Drive \u2713');
-          if(typeof showList==='function')showList();
-        } else {
-          gdStatus('Drive file empty — will save on next change');
+        if(!Array.isArray(parsed)||!parsed.length){
+          gdStatus('Drive file empty — will save on next change');return;
         }
+        // Conflict detection: warn if local and Drive differ
+        var localJson=localStorage.getItem('pt3')||'[]';
+        var driveJson=JSON.stringify(parsed);
+        if(props.length>0&&driveJson!==localJson){
+          var msg='Drive has '+parsed.length+' propert'+(parsed.length===1?'y':'ies')
+            +', local has '+props.length+'.\n\nLoad from Drive? Your local changes will be replaced.';
+          if(!confirm(msg)){gdStatus('Load cancelled \u2014 local data kept');return;}
+        }
+        props=parsed.map(migrate);
+        gdStatus('Loaded from Drive \u2713');
+        if(typeof showList==='function')showList();
       })
       .catch(function(e){gdStatus('Load failed: '+e.message,true);console.error(e);});
   });
@@ -263,6 +278,7 @@ function gdLoadNow(){
 <script>
 // ─── State ───────────────────────────────────────────────────
 var C='£', form={}, props=[], tab='current', screen='list', vid=null, eid=null;
+var compareIds={}; // id -> true for properties selected for comparison
 
 // ─── Stamp duty bands (editable on Assumptions screen) ───────
 var SDSLABS=[
@@ -318,7 +334,7 @@ var SAMPLE=[
 
   {id:3,address:'Apt 9, Hoxton Press',area2:'231 Hackney Road, E2 8NA',price:'520000',area:'58',unit:'sq m',beds:'1',baths:'1',method:'Off-market',date:'2026-04',tenure:'Leasehold',lease:'247',outdoor:'Communal garden',svc:'2800',
    notes:'Offered £505k. Vendor considering. Solicitors on standby.',
-   comps:[{cat:'Sold',addr:'Apt 3, Hoxton Press, E2',price:'498000',sqft:'',sqm:'56'},{cat:'Auctioned',addr:'Apt 14, Hoxton Press, E2',price:'512000',sqft:'',sqm:'59'},{cat:'For Sale',addr:'Apt 22, Hoxton Press, E2',price:'535000',sqft:'',sqm:'62'}],
+   comps:[{cat:'Sold',addr:'Apt 3, Hoxton Press, E2',price:'498000',sqft:'',sqm:'56'},{cat:'Sold at auction',addr:'Apt 14, Hoxton Press, E2',price:'512000',sqft:'',sqm:'59'},{cat:'For Sale',addr:'Apt 22, Hoxton Press, E2',price:'535000',sqft:'',sqm:'62'}],
    yield:'5.1',renos:[{cat:'Painting and Decorating',c:''},{cat:'Kitchen',c:''},{cat:'Bathroom',c:'3200'}],
    fees:[{cat:'Stamp duty',c:''},{cat:'Auction fees',c:''},{cat:'Special condition fees',c:'',pct:''},{cat:'Legal fees',c:'1800'}],
    prior:[{p:'545000',m:'2025-09'}],arch:false,status:'Offer',offer:{}},
@@ -335,7 +351,7 @@ var SAMPLE=[
 function migrate(p){
   // Comps
   var comps=Array.isArray(p.comps)?p.comps:(p.comps?[{cat:'Sold',addr:p.comps,price:'',sqft:'',sqm:''}]:[]);
-  comps=comps.map(function(c){return Object.assign({sqft:'',sqm:'',postcode:'',mapOn:true,beds:'',outdoor:'None',notes:'',dateSold:''},c)});
+  comps=comps.map(function(c){var b=Object.assign({sqft:'',sqm:'',postcode:'',mapOn:true,beds:'',outdoor:'None',notes:'',dateSold:'',auction:false},c);if(b.cat==='Auctioned'){b.cat='For Sale';b.auction=true;}return b});
   // Prior dates — keep only YYYY-MM
   var prior=(p.prior||[]).map(function(x){
     var m=String(x.m||'');
@@ -357,7 +373,7 @@ function migrate(p){
   if(sd&&!sd.c&&sdBase)sd.c=String(calcStampDuty(sdBase));
 
   return Object.assign(
-    {lease:'',area2:'',svc:'',yield:'',notes:'',outdoor:'None',status:'Active',offer:{},renoVat:false,financing:{}},
+    {lease:'',area2:'',svc:'',yield:'',notes:'',outdoor:'None',status:'Active',offer:{},renoVat:false,financing:{},leaseExt:{},url:'',mortgage:{}},
     p,
     {comps:comps,prior:prior,renos:renos,fees:fees}
   );
@@ -427,7 +443,9 @@ var SVG={
   home:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M3 9.5L12 3l9 6.5V20a1 1 0 01-1 1H4a1 1 0 01-1-1V9.5z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 21V12h6v9" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>',
   clock:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/><path d="M12 7v5l3 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   plus:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/></svg>',
-  cog:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.6"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" stroke-width="1.6"/></svg>'
+  cog:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.6"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" stroke-width="1.6"/></svg>',
+  chart:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M3 3v18h18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M7 14l4-4 4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  compare:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="18" rx="1" stroke="currentColor" stroke-width="1.6"/><rect x="14" y="3" width="7" height="18" rx="1" stroke="currentColor" stroke-width="1.6"/></svg>'
 };
 
 // ─── Chrome ──────────────────────────────────────────────────
@@ -442,6 +460,8 @@ function renderTabs(){
   setEl('tabs',
     '<button class="tab-btn'+(tab==='current'   ?' on':'')+'" data-tab="current">'+SVG.home+'Properties</button>'+
     '<button class="tab-btn'+(tab==='history'   ?' on':'')+'" data-tab="history">'+SVG.clock+'History</button>'+
+    '<button class="tab-btn'+(tab==='sales'     ?' on':'')+'" data-tab="sales">'+SVG.chart+'Sales</button>'+
+    '<button class="tab-btn'+(tab==='compare'   ?' on':'')+'" data-tab="compare">'+SVG.compare+'Compare</button>'+
     '<button class="tab-btn'+(tab==='assumptions'?' on':'')+'" data-tab="assumptions">'+SVG.cog+'Assumptions</button>'
   );
 }
@@ -469,23 +489,21 @@ function renoOfferValue(p){
 function offerHtml(p){
   var o=p.offer||{};
   // Seed from table totals only when field is still empty
-  var rv=renoOfferValue(p), ft=ftotal(p.fees);
+  var rv=renoOfferValue(p), ft=ftotal(p.fees), lt=ltotal(p.leaseExt);
   var fc=calcFinancing(p).finCost;
   if(rv&&!o.reno)      o.reno=String(rv);
   if(ft&&!o.fees)      o.fees=String(ft);
   if(fc&&!o.financing) o.financing=String(fc);
+  if(lt&&!o.lease)     o.lease=String(lt);
 
   var op=parseInt(o.offerPrice,10)||0;
   var fe=parseInt(o.fees,10)||0;
   var re=parseInt(o.reno,10)||0;
   var fi=parseInt(o.financing,10)||0;
+  var le=parseInt(o.lease,10)||0;
   var rs=parseInt(o.resale,10)||0;
-  var tc=op+fe+re+fi;
-  var tcNoFi=op+fe+re;       // total before financing
-  var pr=rs&&tc?rs-tc:null;
-  var prNoFi=rs&&tcNoFi?rs-tcNoFi:null;
-  var pc=pr===null?'var(--t2)':pr>=0?'var(--a)':'var(--d)';
-  var pcNoFi=prNoFi===null?'var(--t2)':prNoFi>=0?'var(--a)':'var(--d)';
+  var tc=op+fe+re+fi+le;
+  var tcNoFi=op+fe+re+le;
 
   // Area for £/sqft calc
   var ar=parseInt(p.area,10)||0;
@@ -498,16 +516,15 @@ function offerHtml(p){
 
   var irow=function(label,field,val,xid,showPpa,ppaN){
     var ppaVal=showPpa&&val&&arSqft?Math.round(parseInt(val,10)/arSqft):0;
-    // Column order: label | £/sqft | amount
     return'<tr><td>'+label+'</td>'
       +(showPpa?'<td id="'+(ppaN||'')+'" style="text-align:right;font-size:10px;color:var(--t3);white-space:nowrap;padding-right:6px">'+(ppaVal?C+ppaVal.toLocaleString('en-GB')+'/ft':'\u2014')+'</td>':'<td></td>')
       +'<td>£&thinsp;<input type="number" class="oi" data-of="'+field+'"'+(xid?' id="'+xid+'"':'')+' value="'+esc(val||'')+'" placeholder="\u2014"></td>'
     +'</tr>';
   };
 
-  // Profit: only show when resale entered; positive or negative
-  var pr    = rs ? rs - tc     : null;
-  var prNoFi= rs ? rs - tcNoFi : null;
+  // Profit: only show when resale entered
+  var pr    = rs ? rs-tc     : null;
+  var prNoFi= rs ? rs-tcNoFi : null;
   var pc    =pr===null?'var(--t2)':pr>=0?'var(--a)':'var(--d)';
   var pcNoFi=prNoFi===null?'var(--t2)':prNoFi>=0?'var(--a)':'var(--d)';
 
@@ -518,6 +535,7 @@ function offerHtml(p){
       +irow('Purchase fees',    'fees',      o.fees,  'offer-fees-inp',false)
       +irow('Renovation cost',  'reno',      o.reno,  'offer-reno-inp',false)
       +irow('Financing charges','financing', o.financing,'offer-fin-inp',false)
+      +irow('Extending lease',  'lease',     o.lease, 'offer-lease-inp',false)
       +'<tr class="sub"><td>Total cost</td>'
         +'<td id="offer-tc-ppa" style="text-align:right;font-size:10px;color:var(--t3);white-space:nowrap;padding-right:6px">'+(tc&&arSqft?C+Math.round(tc/arSqft).toLocaleString('en-GB')+'/ft':'\u2014')+'</td>'
         +'<td id="offer-tc">'+(tc?C+tc.toLocaleString('en-GB'):'')+'</td>'
@@ -535,11 +553,12 @@ function refreshOfferCells(p){
   var fe=parseInt(o.fees,10)||0;
   var re=parseInt(o.reno,10)||0;
   var fi=parseInt(o.financing,10)||0;
+  var le=parseInt(o.lease,10)||0;
   var rs=parseInt(o.resale,10)||0;
-  var tc=op+fe+re+fi;
-  var tcNoFi=op+fe+re;
-  var pr=rs&&tc?rs-tc:null;
-  var prNoFi=rs&&tcNoFi?rs-tcNoFi:null;
+  var tc=op+fe+re+fi+le;
+  var tcNoFi=op+fe+re+le;
+  var pr    = rs ? rs-tc     : null;
+  var prNoFi= rs ? rs-tcNoFi : null;
 
   // Area for £/sqft
   var ar=parseInt(p.area,10)||0;
@@ -665,6 +684,28 @@ function buildFinancingHtml(p){
     +'</table></div>';
 }
 
+// ─── Lease extension HTML ────────────────────────────────────
+function ltotal(lx){
+  var ext=parseInt((lx||{}).ext,10)||0;
+  var lg=parseInt((lx||{}).legal,10)||0;
+  return ext+Math.round(ext*0.05)+lg;
+}
+
+function buildLeaseHtml(p){
+  var lx=p.leaseExt||{};
+  var ext=parseInt(lx.ext,10)||0;
+  var sd=ext?Math.round(ext*0.05):0;
+  var lg=parseInt(lx.legal,10)||0;
+  var tot=ext+sd+lg;
+  return'<div id="lease-sec">'+sh('Extending lease')
+    +'<table class="otbl">'
+      +'<tr><td>Lease extension</td><td style="text-align:right">£&thinsp;<input type="number" class="oi" data-lx="ext" value="'+esc(lx.ext||'')+'" placeholder="0"></td></tr>'
+      +'<tr><td>Stamp duty on extension<span style="font-size:10px;color:var(--t3);margin-left:4px">(5%)</span></td><td id="lx-sd" style="text-align:right;font-weight:600">'+(sd?C+sd.toLocaleString('en-GB'):'—')+'</td></tr>'
+      +'<tr><td>Legal fees</td><td style="text-align:right">£&thinsp;<input type="number" class="oi" data-lx="legal" value="'+esc(lx.legal||'')+'" placeholder="0"></td></tr>'
+      +'<tr class="sub"><td>Total</td><td id="lx-total">'+(tot?C+tot.toLocaleString('en-GB'):'')+'</td></tr>'
+    +'</table></div>';
+}
+
 function getSubjectPc(p){
   // Try area2 first, then last word of address
   var src=p.area2||p.address||'';
@@ -680,7 +721,7 @@ function getSubjectPc(p){
 
 function buildCompsHtml(p){
   if(!p.comps||!p.comps.length)return'';
-  var COMP_CATS=['For Sale','Sold','Auctioned','Sold at auction'];
+  var COMP_CATS=['For Sale','Sold','Sold at auction'];
   var sPpa=parseInt(p.price,10)&&parseInt(p.area,10)?Math.round(parseInt(p.price,10)/parseInt(p.area,10)):0;
   var subjectPc=getSubjectPc(p);
   var showMap=subjectPc||p.comps.some(function(c){return c.postcode&&c.postcode.trim();});
@@ -742,7 +783,7 @@ function buildCompsHtml(p){
     out+='<table class="otbl" style="margin-bottom:10px;font-size:12px;table-layout:fixed;width:100%">'
       +'<tr class="sub">'
         +'<td style="width:22px;padding:5px 4px"></td>'
-        +'<td style="text-align:right;padding:5px 6px">Address</td>'
+        +'<td style="padding:5px 6px">Address</td>'
         +'<td style="text-align:right;padding:5px 6px;width:68px">Date</td>'
         +'<td style="text-align:right;padding:5px 6px;width:80px">Price</td>'
         +'<td style="text-align:right;padding:5px 6px;width:62px">£/sq ft</td>'
@@ -757,13 +798,14 @@ function buildCompsHtml(p){
       var ppaCol=cPpa&&sPpa?(cPpa<sPpa?'var(--a)':'var(--d)'):'var(--t)';
 
       var cbHtml=c.postcode
-        ?'<div data-action="toggle-comp" data-ci="'+gi+'" style="width:14px;height:14px;border-radius:3px;border:1.5px solid '+(checked?'var(--a)':'var(--bd2)')+';background:'+(checked?'var(--a)':'transparent')+';display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0">'
-          +(checked?'<svg width="8" height="7" viewBox="0 0 10 8" fill="none"><path d="M1 4l3 3 5-6" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')
-        +'</div>'
-        :'<div style="width:14px"></div>';
+        ?'<label style="display:flex;align-items:center;justify-content:center;width:18px;height:18px;cursor:pointer;flex-shrink:0">'
+          +'<input type="checkbox" data-action="toggle-comp" data-ci="'+gi+'"'+(checked?' checked':'')+' style="width:16px;height:16px;accent-color:var(--a);cursor:pointer;flex-shrink:0;-webkit-appearance:checkbox;appearance:checkbox;margin:0">'
+        +'</label>'
+        :'<div style="width:18px;flex-shrink:0"></div>';
 
       // Address: addr + optional postcode + optional notes on same line
       var addrLine=esc(c.addr);
+      if(c.auction&&cat==='For Sale')addrLine+='<span style="font-size:10px;font-weight:600;background:#FEF5E7;color:#7A4A0A;border-radius:4px;padding:1px 5px;margin-left:5px">Auction</span>';
       if(c.postcode)addrLine+='<span style="color:var(--t3);margin-left:4px;font-size:10px">'+esc(c.postcode)+'</span>';
       var subLine='';
       if(c.beds||c.outdoor||c.notes){
@@ -776,7 +818,7 @@ function buildCompsHtml(p){
 
       out+='<tr style="vertical-align:middle">'
         +'<td style="padding:5px 4px">'+cbHtml+'</td>'
-        +'<td style="text-align:right;padding:5px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--t)">'
+        +'<td style="padding:5px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--t)">'
           +addrLine+subLine
         +'</td>'
         +'<td style="text-align:right;padding:5px 6px;white-space:nowrap;font-size:11px;color:var(--t2)">'+(c.dateSold?fmtDate(c.dateSold):'')+'</td>'
@@ -807,7 +849,7 @@ function initCompMap(p){
   mapDiv._leaflet_map=map;
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
 
-  var CAT_COLOR={'For Sale':'#2E7AC9','Sold':'#2D9E6B','Auctioned':'#E8920A','Sold at auction':'#8B5CF6'};
+  var CAT_COLOR={'For Sale':'#2E7AC9','Sold':'#2D9E6B','Sold at auction':'#8B5CF6'};
   var markers=[];
   var subjectPc=getSubjectPc(p);
   var toShow=p.comps.filter(function(c){return c.postcode&&c.postcode.trim()&&c.mapOn!==false;});
@@ -888,16 +930,182 @@ function toggleCompMap(ci){
 }
 
 
-// ─── List screen ─────────────────────────────────────────────
+// ─── Compare screen ───────────────────────────────────────────
+function showCompare(){
+  screen='compare';
+  renderNav('Compare',
+    '<button class="nav-btn" data-action="list">'+SVG.back+' Back</button>',
+    '<button class="nav-btn r" data-action="clear-compare" style="font-size:13px;color:var(--t2)">Clear</button>'
+  );
+  renderTabs();
+  var selectedIds=Object.keys(compareIds).filter(function(id){return compareIds[id];}).map(Number);
+  var selected=props.filter(function(p){return selectedIds.indexOf(p.id)>=0;});
+  if(selected.length<2){
+    setScr('<div class="empty fi"><div class="ei">\u2194\uFE0F</div><div class="et">Select 2+ properties</div><div class="es">Go to Properties and tick the ones you want to compare</div></div>');
+    return;
+  }
+  var ROWS=[
+    ['Price',          function(p){return money(p.price);}],
+    ['Method',         function(p){return esc(p.method||'\u2014');}],
+    ['Sq Ft',          function(p){var a=parseInt(p.area,10);return(!a)?'\u2014':(p.unit==='sq ft'?a.toLocaleString('en-GB'):Math.round(a*10.764).toLocaleString('en-GB'))+' sq ft';}],
+    ['£/sq ft',        function(p){return ppa(p);}],
+    ['Beds/Baths',     function(p){return(p.beds?p.beds+' / '+(p.baths||'\u2014'):'\u2014');}],
+    ['Tenure',         function(p){return esc(p.tenure+(p.lease?' ('+p.lease+'yr)':''));}],
+    ['Outdoor',        function(p){return esc(p.outdoor||'\u2014');}],
+    ['Service charge', function(p){return p.svc?C+parseInt(p.svc,10).toLocaleString('en-GB')+'/yr':'\u2014';}],
+    ['Offer price',    function(p){return money((p.offer||{}).offerPrice);}],
+    ['Total cost',     function(p){var o=p.offer||{};var t=(parseInt(o.offerPrice,10)||0)+(parseInt(o.fees,10)||0)+(parseInt(o.reno,10)||0)+(parseInt(o.financing,10)||0)+(parseInt(o.lease,10)||0);return t?C+t.toLocaleString('en-GB'):'\u2014';}],
+    ['Reno est.',      function(p){var r=rtotal(p.renos);return r?C+r.toLocaleString('en-GB'):'\u2014';}],
+    ['Gross yield',    function(p){return p.yield?parseFloat(p.yield).toFixed(1)+'%':'\u2014';}],
+    ['Status',         function(p){return esc(p.status||'Active');}],
+    ['Date',           function(p){return fmtDate(p.date);}],
+  ];
+  var html='<div style="padding:12px 14px 80px" class="fi"><div style="overflow-x:auto">'
+    +'<table style="border-collapse:collapse;min-width:100%;font-size:12px">'
+    +'<tr>'
+      +'<th style="text-align:left;padding:6px 8px;font-size:10px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.06em;border-bottom:1px solid var(--bd);min-width:100px"></th>'
+      +selected.map(function(p){
+        return'<th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--bd);max-width:140px;min-width:110px">'
+          +'<div style="font-size:12px;font-weight:600;color:var(--t);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(p.address.split(',')[0])+'</div>'
+          +(p.area2?'<div style="font-size:10px;color:var(--t3)">'+esc(p.area2.split(',')[0])+'</div>':'')
+        +'</th>';
+      }).join('')
+    +'</tr>';
+  ROWS.forEach(function(row){
+    html+='<tr>'
+      +'<td style="padding:7px 8px;font-size:11px;color:var(--t2);white-space:nowrap;border-bottom:1px solid var(--bd)">'+row[0]+'</td>'
+      +selected.map(function(p){return'<td style="padding:7px 8px;border-bottom:1px solid var(--bd);font-weight:500">'+row[1](p)+'</td>';}).join('')
+    +'</tr>';
+  });
+  html+='</table></div></div>';
+  setScr(html);
+}
+
+
+function showSales(){
+  screen='sales';
+  renderNav('Actual Sales');
+  renderTabs();
+
+  var COMP_CATS=['For Sale','Sold','Sold at auction'];
+
+  // Collect ALL comps from ALL properties (not just current ones)
+  var allComps=[];
+  props.forEach(function(p){
+    (p.comps||[]).forEach(function(c){
+      allComps.push(Object.assign({},c,{_propAddr:p.address,_propArea2:p.area2}));
+    });
+  });
+
+  if(!allComps.length){
+    setScr('<div class="empty fi"><div class="ei">\uD83D\uDCC5</div>'
+      +'<div class="et">No comparables yet</div>'
+      +'<div class="es">Add comparables to your properties to see them here</div>'
+    +'</div>');
+    return;
+  }
+
+  var html='<div style="padding:12px 14px 80px" class="fi">';
+  COMP_CATS.forEach(function(cat){
+    var items=allComps.filter(function(c){return c.cat===cat;});
+    if(!items.length)return;
+
+    // Sort by date sold descending
+    items.sort(function(a,b){
+      var ad=a.dateSold||'';var bd=b.dateSold||'';
+      return bd>ad?1:bd<ad?-1:0;
+    });
+
+    html+=sh(cat);
+    html+='<table class="otbl" style="font-size:12px;margin-bottom:14px;width:100%">'
+      +'<tr class="sub">'
+        +'<td style="padding:5px 8px">Address</td>'
+        +'<td style="text-align:right;padding:5px 6px;width:68px">Date</td>'
+        +'<td style="text-align:right;padding:5px 6px;width:80px">Price</td>'
+        +'<td style="text-align:right;padding:5px 6px;width:62px">£/sq ft</td>'
+      +'</tr>';
+
+    items.forEach(function(c){
+      var pr=parseInt(c.price,10)||0;
+      var cAr=c.sqft?parseInt(c.sqft,10):(c.sqm?Math.round(parseInt(c.sqm,10)*10.764):0);
+      var cPpa=pr&&cAr?Math.round(pr/cAr):0;
+
+      var addrLine=esc(c.addr||'(no address)');
+      if(c.postcode)addrLine+='<span style="color:var(--t3);margin-left:5px;font-size:10px">'+esc(c.postcode)+'</span>';
+      var meta='';
+      if(c.beds||c.outdoor||c.notes||c._propArea2){
+        meta='<div style="font-size:10px;color:var(--t3);margin-top:1px">';
+        if(c._propArea2)meta+='Re: '+esc(c._propArea2)+' ';
+        if(c.beds)meta+=esc(c.beds)+'bd ';
+        if(c.outdoor&&c.outdoor!=='None')meta+=esc(c.outdoor)+' ';
+        if(c.notes)meta+='<em>'+esc(c.notes)+'</em>';
+        meta+='</div>';
+      }
+
+      html+='<tr>'
+        +'<td style="padding:5px 8px;color:var(--t)">'+addrLine+meta+'</td>'
+        +'<td style="text-align:right;padding:5px 6px;font-size:11px;color:var(--t2);white-space:nowrap">'+(c.dateSold?fmtDate(c.dateSold):'')+'</td>'
+        +'<td style="text-align:right;padding:5px 6px;white-space:nowrap;font-weight:600">'+money(c.price)+'</td>'
+        +'<td style="text-align:right;padding:5px 6px;white-space:nowrap;font-weight:600;color:var(--t)">'+(cPpa?C+cPpa.toLocaleString('en-GB'):'—')+'</td>'
+      +'</tr>';
+    });
+    html+='</table>';
+  });
+
+  html+='</div>';
+  setScr(html);
+}
+
+// ─── Mortgage Calculator ──────────────────────────────────────
+function buildMortgageHtml(p){
+  var m=p.mortgage||{};
+  var price=parseInt(p.price,10)||0;
+  var loan=parseInt(m.loan,10)||0;
+  var deposit=parseInt(m.deposit,10)||(loan&&price?price-loan:0);
+  var rate=parseFloat(m.rate)||0;
+  var term=parseInt(m.term,10)||0;
+  var monthlyRate=rate/100/12;
+  var monthly=loan&&rate&&term
+    ?(monthlyRate===0?Math.round(loan/term):Math.round(loan*(monthlyRate*Math.pow(1+monthlyRate,term*12))/(Math.pow(1+monthlyRate,term*12)-1)))
+    :0;
+  var totalPaid=monthly&&term?monthly*term*12:0;
+  var totalInterest=totalPaid&&loan?totalPaid-loan:0;
+  var ltv=loan&&price?Math.round(loan/price*100):0;
+
+  function mrow(label,id,val,placeholder,suffix){
+    return'<tr><td>'+label+'</td><td style="text-align:right">'
+      +(suffix?'':'£&thinsp;')
+      +'<input type="number" class="oi" data-mg="'+id+'" value="'+esc(val||'')+'" placeholder="'+(placeholder||'0')+'">'
+      +(suffix?'&thinsp;'+suffix:'')
+    +'</td></tr>';
+  }
+
+  return'<div id="mortgage-sec">'+sh('Mortgage calculator')
+    +'<table class="otbl">'
+      +mrow('Purchase price',  'price_ref', p.price?parseInt(p.price,10):'', 'listing price')
+      +mrow('Deposit (£)',     'deposit',   m.deposit||deposit||'',  'e.g. 200000')
+      +'<tr><td>LTV</td><td id="mg-ltv" style="text-align:right;font-weight:600;color:var(--t2)">'+(ltv?ltv+'%':'\u2014')+'</td></tr>'
+      +mrow('Loan amount',     'loan',      m.loan||loan||'',        'e.g. 700000')
+      +mrow('Interest rate',   'rate',      m.rate,                  'e.g. 4.5','%')
+      +mrow('Term (years)',    'term',      m.term,                  'e.g. 25','yrs')
+      +'<tr class="sub"><td>Monthly repayment</td><td id="mg-monthly">'+(monthly?C+monthly.toLocaleString('en-GB'):'')+'</td></tr>'
+      +'<tr><td>Total repaid</td><td id="mg-total" style="font-size:12px;color:var(--t2)">'+(totalPaid?C+totalPaid.toLocaleString('en-GB'):'')+'</td></tr>'
+      +'<tr><td>Total interest</td><td id="mg-interest" style="font-size:12px;color:var(--d)">'+(totalInterest?C+totalInterest.toLocaleString('en-GB'):'')+'</td></tr>'
+    +'</table></div>';
+}
+
+
 function showList(){
   screen='list';
   var isCur=tab==='current';
   var list=props.filter(function(p){return isCur?!p.arch:p.arch});
+  var nCompare=Object.keys(compareIds).filter(function(id){return compareIds[id];}).length;
   renderNav(isCur?'Properties':'History',
     '<div style="min-width:56px"></div>',
     isCur
       ?'<div style="display:flex;align-items:center;gap:8px">'
         +'<span id="gd-status" style="font-size:10px;color:var(--t3)"></span>'
+        +(nCompare>=2?'<button class="nav-btn r" data-action="go-compare" style="font-size:13px;background:var(--a);color:#fff;padding:6px 12px;border-radius:10px;border:none;cursor:pointer">Compare ('+nCompare+')</button>':'')
         +'<button class="nav-btn add" data-action="add">'+SVG.plus+'</button>'
       +'</div>'
       :'<div style="min-width:56px"></div>'
@@ -913,18 +1121,29 @@ function showList(){
   list.forEach(function(p){
     var sc=SC[p.status]||SC.Active;
     var rt=rtotal(p.renos);
+    var sel=!!compareIds[p.id];
+    // Compare checkbox replaces status pill in top-right when on Properties tab
+    var topRight=isCur
+      ?'<div data-action="toggle-compare" data-id="'+p.id+'" style="display:flex;align-items:center;gap:6px;cursor:pointer;flex-shrink:0">'
+          +'<span style="font-size:11px;font-weight:600;color:'+(sel?'var(--a)':'var(--t3)')+'">Compare</span>'
+          +'<div style="width:18px;height:18px;border-radius:5px;border:1.5px solid '+(sel?'var(--a)':'var(--bd2)')+';background:'+(sel?'var(--a)':'transparent')+';display:flex;align-items:center;justify-content:center;flex-shrink:0">'
+            +(sel?'<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l3 3 5-6" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')
+          +'</div>'
+        +'</div>'
+      :pill(p.status,{bg:sc.bg,t:sc.t,d:sc.d});
     html+='<div class="card fi" data-action="view" data-id="'+p.id+'">'
-      +'<div style="display:flex;justify-content:space-between;align-items:flex-start">'
+      +'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">'
         +'<div style="flex:1;padding-right:10px">'
           +'<div class="card-addr">'+esc(p.address)+'</div>'
           +(p.area2?'<div class="card-sub">'+esc(p.area2)+'</div>':'')
         +'</div>'
-        +pill(p.status,{bg:sc.bg,t:sc.t,d:sc.d})
+        +topRight
       +'</div>'
       +'<div class="card-pills">'
         +(p.method?pill(p.method,MC[p.method]||MC['Private treaty']):'')
         +(p.tenure?pill(tLabel(p),TC):'')
         +(p.outdoor&&p.outdoor!=='None'?pill(p.outdoor,OC):'')
+        +(!isCur?pill(p.status,{bg:sc.bg,t:sc.t,d:sc.d}):'')
       +'</div>'
       +'<div class="stats">'
         +'<div class="stat"><div class="stat-l">Price</div><div class="stat-v">'+money(p.price)+'</div></div>'
@@ -933,7 +1152,10 @@ function showList(){
       +'</div>'
       +'<div class="card-ft">'
         +'<span>'+(rt?'🔧 Reno: '+C+rt.toLocaleString('en-GB'):'')+'</span>'
-        +'<span>'+fmtDate(p.date)+'</span>'
+        +'<div style="display:flex;align-items:center;gap:10px">'
+          +(p.arch?'<button data-action="delete-prop" data-id="'+p.id+'" style="font-size:11px;color:var(--d);background:none;border:none;cursor:pointer;font-family:\'DM Sans\',sans-serif;padding:0">Delete</button>':'')
+          +'<span>'+fmtDate(p.date)+'</span>'
+        +'</div>'
       +'</div>'
     +'</div>';
   });
@@ -991,6 +1213,7 @@ function showAnalysis(){
         +'<div style="flex:1;padding-right:10px">'
           +'<div style="font-family:\'DM Serif Display\',serif;font-size:20px;line-height:1.25">'+esc(p.address)+'</div>'
           +(p.area2?'<div style="font-size:13px;color:var(--t2);margin-top:3px">'+esc(p.area2)+'</div>':'')
+          +(p.url?'<a href="'+esc(p.url)+'" target="_blank" style="font-size:11px;color:var(--a);text-decoration:none;display:inline-block;margin-top:4px">View listing \u2197</a>':'')
         +'</div>'
         +pill(p.status,{bg:sc.bg,t:sc.t,d:sc.d})
       +'</div>'
@@ -1020,8 +1243,12 @@ function showAnalysis(){
     +sh('Renovations required')+buildRenoHtml(p)
     // Purchase fees
     +sh('Purchase fees')+buildFeesHtml(p)
+    // Extending lease
+    +buildLeaseHtml(p)
     // Financing charges
     +buildFinancingHtml(p)
+    // Mortgage calculator
+    +buildMortgageHtml(p)
     // Comparables
     +buildCompsHtml(p)
     // Notes
@@ -1128,6 +1355,8 @@ function buildFormTable(cats,items,dataF,newCatId,addAction,removeAction){
 }
 
 function renderForm(){
+  var scr=$('scr');
+  var savedScroll=scr?scr.scrollTop:0;
   var f=form;
 
   // Prior price rows
@@ -1136,7 +1365,7 @@ function renderForm(){
   }).join('');
 
   // Comparables
-  var CCATS=['For Sale','Sold','Auctioned','Sold at auction'];
+  var CCATS=['For Sale','Sold','Sold at auction'];
   var ch='';
   CCATS.forEach(function(cat){
     ch+='<div style="margin-bottom:10px">'
@@ -1155,7 +1384,7 @@ function renderForm(){
           +'<button class="rm" data-action="rc" data-i="'+gi+'">\u00d7</button>'
         +'</div>'
         +'<div style="display:flex;gap:8px;margin-bottom:8px">'
-          +'<div style="flex:2;min-width:0"><label class="fl" style="font-size:10px">Postcode</label><input type="text" data-f="comp-postcode" data-i="'+gi+'" value="'+esc(c.postcode||'')+'" placeholder="e.g. SW1A 1AA" style="text-transform:uppercase"></div>'
+          +'<div style="flex:2;min-width:0"><label class="fl" style="font-size:10px">Postcode</label><div class="pc-wrap"><input type="text" data-f="comp-postcode" data-i="'+gi+'" data-comp-suggest="1" autocomplete="off" value="'+esc(c.postcode||'')+'" placeholder="e.g. SW1A 1AA" style="text-transform:uppercase;width:100%"></div></div>'
           +'<div style="flex:2;min-width:0"><label class="fl" style="font-size:10px">Date sold</label><input type="month" data-f="comp-date" data-i="'+gi+'" value="'+esc(c.dateSold||'')+'"></div>'
           +'<div style="flex:1;min-width:0"><label class="fl" style="font-size:10px">Sq Ft</label><input type="number" data-f="comp-sqft" data-i="'+gi+'" value="'+esc(c.sqft||'')+'" placeholder="e.g. 720"></div>'
           +'<div style="flex:1;min-width:0"><label class="fl" style="font-size:10px">Sq M</label><input type="number" data-f="comp-sqm" data-i="'+gi+'" value="'+esc(c.sqm||'')+'" placeholder="e.g. 67"></div>'
@@ -1163,6 +1392,7 @@ function renderForm(){
         +'<div style="display:flex;gap:8px;margin-bottom:8px">'
           +'<div style="flex:1;min-width:0"><label class="fl" style="font-size:10px">Bedrooms</label><input type="number" data-f="comp-beds" data-i="'+gi+'" value="'+esc(c.beds||'')+'" placeholder="0"></div>'
           +'<div style="flex:2;min-width:0"><label class="fl" style="font-size:10px">Outdoor space</label><select data-f="comp-outdoor" data-i="'+gi+'">'+opts(OUTDOOR,c.outdoor||'None')+'</select></div>'
+          +(cat==='For Sale'?'<div style="flex-shrink:0;display:flex;align-items:center;gap:6px;padding-top:20px"><input type="checkbox" data-f="comp-auction" data-i="'+gi+'"'+(c.auction?' checked':'')+' style="width:16px;height:16px;accent-color:var(--a);cursor:pointer"><span style="font-size:12px;color:var(--t2)">Auction</span></div>':'')
         +'</div>'
         +'<div class="fg" style="margin-bottom:0"><label class="fl" style="font-size:10px">Notes</label><input type="text" data-f="comp-notes" data-i="'+gi+'" value="'+esc(c.notes||'')+'" placeholder="e.g. top floor, period features"></div>'
       +'</div>';
@@ -1174,6 +1404,7 @@ function renderForm(){
   setScr('<div class="fw fi">'
     +'<div class="fg" style="margin-bottom:8px"><input type="text" data-f="address" value="'+esc(f.address)+'" placeholder="Address"></div>'
     +'<div class="fg"><input type="text" data-f="area2" value="'+esc(f.area2||'')+'" placeholder="Area / postcode"></div>'
+    +'<div class="fg"><input type="url" data-f="url" value="'+esc(f.url||'')+'" placeholder="Property listing URL (Rightmove, Zoopla\u2026)"></div>'
     +'<div class="r2">'
       +'<div class="fg"><label class="fl">Guide price (\u00a3)</label><input type="number" data-f="price" value="'+esc(f.price)+'" placeholder="e.g. 450000"></div>'
       +'<div class="fg"><label class="fl">Date</label><input type="month" data-f="date" value="'+esc(f.date)+'"></div>'
@@ -1207,13 +1438,15 @@ function renderForm(){
     +'<div class="fg"><label class="fl">Personal notes</label><textarea data-f="notes" placeholder="Observations, concerns, action points\u2026">'+esc(f.notes)+'</textarea></div>'
     +'<button class="btn-p" data-action="save">'+(eid?'Save changes':'Add property')+'</button>'
   +'</div>');
+  // Restore scroll position so re-renders don't jump to top
+  if(scr&&savedScroll)scr.scrollTop=savedScroll;
 }
 
 // ─── Property factory ────────────────────────────────────────
 function newForm(){
   return{id:Date.now(),address:'',area2:'',price:'',area:'',unit:'sq ft',beds:'',baths:'',
     method:'Private treaty',date:'',tenure:'Freehold',lease:'',outdoor:'None',svc:'',
-    notes:'',yield:'',comps:[],renoVat:false,financing:{},
+    notes:'',yield:'',comps:[],renoVat:false,financing:{},leaseExt:{},url:'',mortgage:{},
     renos:RCATS.map(function(cat){return{cat:cat,c:''}}),
     fees: FCATS.map(function(cat){return{cat:cat,c:'',pct:''}}),
     prior:[],arch:false,status:'Active',offer:{}};
@@ -1266,12 +1499,120 @@ function refreshFeesSec(p){
 }
 
 // ─── Event delegation ─────────────────────────────────────────
+// ─── Postcode autocomplete helpers ───────────────────────────
+function getHistoricalComps(){
+  // Collect unique comps across all properties (deduplicated by addr+postcode)
+  var seen={}, results=[];
+  props.forEach(function(p){
+    (p.comps||[]).forEach(function(c){
+      if(!c.postcode&&!c.addr)return;
+      var key=(c.postcode||'')+'|'+(c.addr||'');
+      if(seen[key])return;
+      seen[key]=true;
+      results.push(Object.assign({},c));
+    });
+  });
+  // Also include form comps already entered (so you can reuse within same property)
+  if(form&&form.comps){
+    form.comps.forEach(function(c){
+      if(!c.postcode&&!c.addr)return;
+      var key=(c.postcode||'')+'|'+(c.addr||'');
+      if(seen[key])return;
+      seen[key]=true;
+      results.push(Object.assign({},c));
+    });
+  }
+  return results;
+}
+
+function showPcSuggestions(inputEl,query){
+  hidePcSuggestions();
+  if(!query||query.length<2)return;
+  var q=query.toUpperCase();
+  var gi=inputEl.dataset.i!=null?+inputEl.dataset.i:null;
+  // Get the category of the comp being edited so we only show matching history
+  var currentCat=gi!=null&&form.comps&&form.comps[gi]?form.comps[gi].cat:null;
+
+  var matches=getHistoricalComps().filter(function(c){
+    // Category filter: only show history from the same category
+    if(currentCat&&c.cat!==currentCat)return false;
+    var pc=(c.postcode||'').toUpperCase();
+    var addr=(c.addr||'').toUpperCase();
+    return pc.indexOf(q)===0||pc.replace(/\s/g,'').indexOf(q.replace(/\s/g,''))===0||addr.indexOf(q)>=0;
+  }).slice(0,8);
+  if(!matches.length)return;
+
+  var wrap=inputEl.parentNode;
+  var drop=document.createElement('div');
+  drop.className='pc-drop';
+  drop.id='pc-dropdown';
+
+  matches.forEach(function(c,idx){
+    var item=document.createElement('div');
+    item.className='pc-item';
+    var subParts=[];
+    if(c.price)subParts.push(money(c.price));
+    if(c.sqft)subParts.push(c.sqft+' sq ft');
+    else if(c.sqm)subParts.push(c.sqm+' sq m');
+    if(c.beds)subParts.push(c.beds+' bed');
+    if(c.cat)subParts.push(c.cat);
+    item.innerHTML='<div class="pc-item-main">'+esc(c.addr||c.postcode)
+      +(c.postcode&&c.addr?' <span style="color:var(--t3)">'+esc(c.postcode)+'</span>':'')
+      +'</div>'
+      +(subParts.length?'<div class="pc-item-sub">'+subParts.join(' \u00b7 ')+'</div>':'');
+
+    // Use touchstart + click for iOS; prevent blur-before-click
+    function selectItem(e){
+      e.preventDefault();
+      e.stopPropagation();
+      var i=gi!=null?+gi:null;
+      if(i!=null&&form.comps&&form.comps[i]){
+        if(c.addr)    form.comps[i].addr=c.addr;
+        if(c.postcode)form.comps[i].postcode=c.postcode;
+        if(c.price)   form.comps[i].price=c.price;
+        if(c.sqft)    form.comps[i].sqft=c.sqft;
+        if(c.sqm)     form.comps[i].sqm=c.sqm;
+        if(c.beds)    form.comps[i].beds=c.beds;
+        if(c.outdoor) form.comps[i].outdoor=c.outdoor;
+        if(c.notes)   form.comps[i].notes=c.notes;
+        if(c.dateSold)form.comps[i].dateSold=c.dateSold;
+      }
+      hidePcSuggestions();
+      renderForm();
+    }
+    item.addEventListener('touchstart',selectItem,{passive:false});
+    item.addEventListener('click',selectItem);
+    drop.appendChild(item);
+  });
+
+  wrap.appendChild(drop);
+
+  // Hide on blur after short delay (gives touchstart time to fire first)
+  inputEl._pcBlur=function(){setTimeout(hidePcSuggestions,200);};
+  inputEl.addEventListener('blur',inputEl._pcBlur);
+}
+
+function hidePcSuggestions(){
+  var d=document.getElementById('pc-dropdown');
+  if(d){
+    // Remove blur listener from the associated input
+    var inp=d.closest('.pc-wrap');
+    if(inp){
+      var actual=inp.querySelector('input');
+      if(actual&&actual._pcBlur){actual.removeEventListener('blur',actual._pcBlur);actual._pcBlur=null;}
+    }
+    d.parentNode.removeChild(d);
+  }
+}
+
 document.addEventListener('click',function(e){
   // Tab bar
   var tb=e.target.closest('[data-tab]');
   if(tb){
     tab=tb.dataset.tab;
     if(tab==='assumptions')showAssumptions();
+    else if(tab==='sales')showSales();
+    else if(tab==='compare')showCompare();
     else showList();
     return;
   }
@@ -1304,12 +1645,28 @@ document.addEventListener('click',function(e){
     return;
   }
 
-  // Comparables map toggle checkbox
+  // Comparables map toggle — native checkbox fires change on iOS
   if(a==='toggle-comp'){
+    e.stopPropagation();
     var ci=el.dataset.ci!=null?+el.dataset.ci:null;
     if(ci!=null)toggleCompMap(ci);
     return;
   }
+  if(a==='delete-prop'){
+    if(confirm('Permanently delete this property? This cannot be undone.')){
+      props=props.filter(function(p){return p.id!==id;});
+      save();showList();
+    }
+    return;
+  }
+  if(a==='toggle-compare'){
+    e.stopPropagation();
+    compareIds[id]=!compareIds[id];
+    showList();
+    return;
+  }
+  if(a==='go-compare'){tab='compare';showCompare();return;}
+  if(a==='clear-compare'){compareIds={};showList();return;}
   if(a==='add')    {goAdd();return;}
   if(a==='view')   {goView(id);return;}
   if(a==='edit')   {goEdit(id);return;}
@@ -1332,7 +1689,7 @@ document.addEventListener('click',function(e){
   if(a==='ap'){form.prior=(form.prior||[]).concat([{p:'',m:''}]);renderForm();return;}
   if(a==='rp'){form.prior=(form.prior||[]).filter(function(_,j){return j!==i});renderForm();return;}
   // Form — comps
-  if(a==='ac'){form.comps=(form.comps||[]).concat([{cat:el.dataset.cat,addr:'',postcode:'',price:'',sqft:'',sqm:'',mapOn:true,beds:'',outdoor:'None',notes:'',dateSold:''}]);renderForm();return;}
+  if(a==='ac'){form.comps=(form.comps||[]).concat([{cat:el.dataset.cat,addr:'',postcode:'',price:'',sqft:'',sqm:'',mapOn:true,beds:'',outdoor:'None',notes:'',dateSold:'',auction:false}]);renderForm();return;}
   if(a==='rc'){form.comps=(form.comps||[]).filter(function(_,j){return j!==i});renderForm();return;}
 
   // Analysis — renos
@@ -1445,6 +1802,67 @@ document.addEventListener('input',function(e){
     return;
   }
 
+  // Analysis — mortgage calculator
+  if(el.dataset.mg&&screen==='analysis'){
+    var p=props.find(function(x){return x.id===vid});
+    if(!p)return;
+    if(!p.mortgage)p.mortgage={};
+    var field=el.dataset.mg;
+    p.mortgage[field]=val;
+    var m=p.mortgage;
+    var price=parseInt(p.price,10)||0;
+
+    // Cross-calculate deposit ↔ loan ↔ LTV
+    if(field==='deposit'&&price){
+      var dep=parseInt(val,10)||0;
+      var newLoan=dep?price-dep:0;
+      if(newLoan>0){m.loan=String(newLoan);var lInp=document.querySelector('[data-mg="loan"]');if(lInp)lInp.value=newLoan;}
+    } else if(field==='loan'&&price){
+      var newLoan=parseInt(val,10)||0;
+      var newDep=newLoan?price-newLoan:0;
+      if(newDep>0){m.deposit=String(newDep);var dInp=document.querySelector('[data-mg="deposit"]');if(dInp)dInp.value=newDep;}
+    }
+
+    var loan=parseInt(m.loan,10)||0;
+    var rate=parseFloat(m.rate)||0;
+    var term=parseInt(m.term,10)||0;
+    var mr=rate/100/12;
+    var monthly=loan&&rate&&term?(mr===0?Math.round(loan/term):Math.round(loan*(mr*Math.pow(1+mr,term*12))/(Math.pow(1+mr,term*12)-1))):0;
+    var totalPaid=monthly&&term?monthly*term*12:0;
+    var interest=totalPaid&&loan?totalPaid-loan:0;
+    var ltv=loan&&price?Math.round(loan/price*100):0;
+
+    var mEl=$('mg-monthly');var tEl=$('mg-total');var iEl=$('mg-interest');var ltvEl=$('mg-ltv');
+    if(mEl)mEl.textContent=monthly?C+monthly.toLocaleString('en-GB'):'';
+    if(tEl)tEl.textContent=totalPaid?C+totalPaid.toLocaleString('en-GB'):'';
+    if(iEl)iEl.textContent=interest?C+interest.toLocaleString('en-GB'):'';
+    if(ltvEl)ltvEl.textContent=ltv?ltv+'%':'\u2014';
+    save();
+    return;
+  }
+
+  // Analysis — lease extension fields
+  if(el.dataset.lx&&screen==='analysis'){
+    var p=props.find(function(x){return x.id===vid});
+    if(!p)return;
+    if(!p.leaseExt)p.leaseExt={};
+    p.leaseExt[el.dataset.lx]=val;
+    var lx=p.leaseExt;
+    var ext=parseInt(lx.ext,10)||0;
+    var sd=ext?Math.round(ext*0.05):0;
+    var lg=parseInt(lx.legal,10)||0;
+    var tot=ext+sd+lg;
+    var sdEl=$('lx-sd');    if(sdEl)sdEl.textContent=sd?C+sd.toLocaleString('en-GB'):'—';
+    var totEl=$('lx-total');if(totEl)totEl.textContent=tot?C+tot.toLocaleString('en-GB'):'';
+    // Sync to offer.lease
+    if(!p.offer)p.offer={};
+    p.offer.lease=tot?String(tot):'';
+    var lInp=$('offer-lease-inp');if(lInp)lInp.value=tot||'';
+    save();
+    refreshOfferCells(p);
+    return;
+  }
+
   // Analysis — offer fields
   if(el.dataset.of&&screen==='analysis'){
     var p=props.find(function(x){return x.id===vid});
@@ -1500,7 +1918,7 @@ document.addEventListener('input',function(e){
   var f=el.dataset.f;
   if(!f||screen!=='form')return;
   var i=el.dataset.i!=null?+el.dataset.i:null;
-  var DIRECT={address:1,area2:1,price:1,beds:1,baths:1,method:1,svc:1,lease:1,yield:1,notes:1,outdoor:1};
+  var DIRECT={address:1,area2:1,price:1,beds:1,baths:1,method:1,svc:1,lease:1,yield:1,notes:1,outdoor:1,url:1};
   if(DIRECT[f])             form[f]=val;
   else if(f==='tenure')     {form.tenure=val;renderForm();}
   else if(f==='area-ft')    {form.area=val;form.unit='sq ft';var o=$('ism');if(o)o.value='';}
@@ -1510,7 +1928,10 @@ document.addEventListener('input',function(e){
   else if(f==='reno-c' &&i!=null&&form.renos[i]) form.renos[i].c=val;
   else if(f==='fee-c'  &&i!=null&&form.fees &&form.fees[i]) form.fees[i].c=val;
   else if(f==='comp-addr'    &&i!=null&&form.comps[i]) form.comps[i].addr=val;
-  else if(f==='comp-postcode'&&i!=null&&form.comps[i]) form.comps[i].postcode=val.toUpperCase();
+  else if(f==='comp-postcode'&&i!=null&&form.comps[i]){
+    form.comps[i].postcode=val.toUpperCase();
+    if(screen==='form')showPcSuggestions(el,val);
+  }
   else if(f==='comp-price'   &&i!=null&&form.comps[i]) form.comps[i].price=val;
   else if(f==='comp-beds'    &&i!=null&&form.comps[i]) form.comps[i].beds=val;
   else if(f==='comp-outdoor' &&i!=null&&form.comps[i]) form.comps[i].outdoor=val;
@@ -1522,8 +1943,16 @@ document.addEventListener('input',function(e){
 
 document.addEventListener('change',function(e){
   var el=e.target, f=el.dataset.f, val=el.value;
-  if(!f||screen!=='form')return;
   var i=el.dataset.i!=null?+el.dataset.i:null;
+
+  // Native checkbox for comp map toggle — fires change reliably on iOS
+  if(el.dataset.action==='toggle-comp'){
+    var ci=el.dataset.ci!=null?+el.dataset.ci:null;
+    if(ci!=null)toggleCompMap(ci);
+    return;
+  }
+
+  if(!f||screen!=='form')return;
   if(f==='tenure')  {form.tenure=val;renderForm();}
   else if(f==='method')  form.method=val;
   else if(f==='outdoor') form.outdoor=val;
@@ -1533,6 +1962,7 @@ document.addEventListener('change',function(e){
   else if(f==='comp-sqm' &&i!=null&&form.comps[i]){form.comps[i].sqm=val;if(val)form.comps[i].sqft='';}
   else if(f==='comp-outdoor'&&i!=null&&form.comps[i])form.comps[i].outdoor=val;
   else if(f==='comp-date'   &&i!=null&&form.comps[i])form.comps[i].dateSold=val;
+  else if(f==='comp-auction'&&i!=null&&form.comps[i])form.comps[i].auction=el.checked;
 });
 
 // ─── Boot ─────────────────────────────────────────────────────
