@@ -351,7 +351,7 @@ var SAMPLE=[
 function migrate(p){
   // Comps
   var comps=Array.isArray(p.comps)?p.comps:(p.comps?[{cat:'Sold',addr:p.comps,price:'',sqft:'',sqm:''}]:[]);
-  comps=comps.map(function(c){var b=Object.assign({sqft:'',sqm:'',postcode:'',mapOn:true,beds:'',outdoor:'None',notes:'',dateSold:'',auction:false},c);if(b.cat==='Auctioned'){b.cat='For Sale';b.auction=true;}return b});
+  comps=comps.map(function(c){var b=Object.assign({sqft:'',sqm:'',postcode:'',mapOn:true,beds:'',outdoor:'None',notes:'',dateSold:'',dateListed:'',auction:false},c);if(b.cat==='Auctioned'){b.cat='For Sale';b.auction=true;}return b});
   // Prior dates — keep only YYYY-MM
   var prior=(p.prior||[]).map(function(x){
     var m=String(x.m||'');
@@ -373,7 +373,7 @@ function migrate(p){
   if(sd&&!sd.c&&sdBase)sd.c=String(calcStampDuty(sdBase));
 
   return Object.assign(
-    {lease:'',area2:'',svc:'',yield:'',notes:'',outdoor:'None',status:'Active',offer:{},renoVat:false,financing:{},leaseExt:{},url:'',mortgage:{}},
+    {lease:'',area2:'',svc:'',yield:'',notes:'',outdoor:'None',status:'Active',offer:{},renoVat:false,financing:{},leaseExt:{},url:'',mortgage:{},soldPrice:'',soldDate:'',targetResale:'',actualResale:'',resaleDate:''},
     p,
     {comps:comps,prior:prior,renos:renos,fees:fees}
   );
@@ -944,40 +944,75 @@ function showCompare(){
     setScr('<div class="empty fi"><div class="ei">\u2194\uFE0F</div><div class="et">Select 2+ properties</div><div class="es">Go to Properties and tick the ones you want to compare</div></div>');
     return;
   }
+
+  function sqftOf(p){var a=parseInt(p.area,10)||0;return p.unit==='sq ft'?a:(a?Math.round(a*10.764):0);}
+  function ppaSqft(amt,p){var sf=sqftOf(p);return amt&&sf?C+Math.round(amt/sf).toLocaleString('en-GB')+'/ft':'\u2014';}
+  function offerBase(p){return parseInt((p.offer||{}).offerPrice,10)||0;}
+  function totalCost(p){var o=p.offer||{};return(parseInt(o.offerPrice,10)||0)+(parseInt(o.fees,10)||0)+(parseInt(o.reno,10)||0)+(parseInt(o.financing,10)||0)+(parseInt(o.lease,10)||0);}
+  function opPlusLease(p){var o=p.offer||{};return(parseInt(o.offerPrice,10)||0)+(parseInt(o.lease,10)||0);}
+
   var ROWS=[
-    ['Price',          function(p){return money(p.price);}],
-    ['Method',         function(p){return esc(p.method||'\u2014');}],
-    ['Sq Ft',          function(p){var a=parseInt(p.area,10);return(!a)?'\u2014':(p.unit==='sq ft'?a.toLocaleString('en-GB'):Math.round(a*10.764).toLocaleString('en-GB'))+' sq ft';}],
-    ['£/sq ft',        function(p){return ppa(p);}],
-    ['Beds/Baths',     function(p){return(p.beds?p.beds+' / '+(p.baths||'\u2014'):'\u2014');}],
-    ['Tenure',         function(p){return esc(p.tenure+(p.lease?' ('+p.lease+'yr)':''));}],
-    ['Outdoor',        function(p){return esc(p.outdoor||'\u2014');}],
-    ['Service charge', function(p){return p.svc?C+parseInt(p.svc,10).toLocaleString('en-GB')+'/yr':'\u2014';}],
-    ['Offer price',    function(p){return money((p.offer||{}).offerPrice);}],
-    ['Total cost',     function(p){var o=p.offer||{};var t=(parseInt(o.offerPrice,10)||0)+(parseInt(o.fees,10)||0)+(parseInt(o.reno,10)||0)+(parseInt(o.financing,10)||0)+(parseInt(o.lease,10)||0);return t?C+t.toLocaleString('en-GB'):'\u2014';}],
-    ['Reno est.',      function(p){var r=rtotal(p.renos);return r?C+r.toLocaleString('en-GB'):'\u2014';}],
-    ['Gross yield',    function(p){return p.yield?parseFloat(p.yield).toFixed(1)+'%':'\u2014';}],
-    ['Status',         function(p){return esc(p.status||'Active');}],
-    ['Date',           function(p){return fmtDate(p.date);}],
+    {label:'Guide price',                    fn:function(p){return money(p.price);},          num:function(p){return parseInt(p.price,10)||0;},         low:true},
+    {label:'Method',                          fn:function(p){return esc(p.method||'\u2014');}, num:null},
+    {label:'Sq Ft',                           fn:function(p){var s=sqftOf(p);return s?s.toLocaleString('en-GB')+' sq ft':'\u2014';}, num:function(p){return sqftOf(p);}, low:false},
+    {label:'Guide price / sq ft',             fn:function(p){return ppaSqft(parseInt(p.price,10)||0,p);}, num:function(p){var s=sqftOf(p);return s?Math.round((parseInt(p.price,10)||0)/s):0;}, low:true},
+    {label:'Offer price',                     fn:function(p){return money((p.offer||{}).offerPrice);}, num:function(p){return offerBase(p);}, low:true},
+    {label:'Offer price / sq ft',             fn:function(p){return ppaSqft(offerBase(p),p);}, num:function(p){var s=sqftOf(p);return s&&offerBase(p)?Math.round(offerBase(p)/s):0;}, low:true},
+    {label:'Offer + lease extension',         fn:function(p){var v=opPlusLease(p);return v?money(v):'\u2014';}, num:function(p){return opPlusLease(p);}, low:true},
+    {label:'Offer + lease ext / sq ft',       fn:function(p){return ppaSqft(opPlusLease(p),p);}, num:function(p){var s=sqftOf(p);return s&&opPlusLease(p)?Math.round(opPlusLease(p)/s):0;}, low:true},
+    {label:'Total renovations',               fn:function(p){var r=rtotal(p.renos);return r?C+r.toLocaleString('en-GB'):'\u2014';}, num:function(p){return rtotal(p.renos);}, low:true},
+    {label:'Total cost',                      fn:function(p){var t=totalCost(p);return t?C+t.toLocaleString('en-GB'):'\u2014';}, num:function(p){return totalCost(p);}, low:true},
+    {label:'Total cost / sq ft',              fn:function(p){return ppaSqft(totalCost(p),p);}, num:function(p){var s=sqftOf(p);return s&&totalCost(p)?Math.round(totalCost(p)/s):0;}, low:true},
+    {label:'Potential resale',                fn:function(p){return money((p.offer||{}).resale);}, num:function(p){return parseInt((p.offer||{}).resale,10)||0;}, low:false},
+    {label:'Potential profit',                fn:function(p){var o=p.offer||{};var rs=parseInt(o.resale,10)||0;var tc=totalCost(p);if(!rs||!tc)return'\u2014';var pr=rs-tc;return(pr>=0?'+':'')+C+Math.abs(pr).toLocaleString('en-GB');}, num:function(p){var o=p.offer||{};var rs=parseInt(o.resale,10)||0;var tc=totalCost(p);return rs&&tc?rs-tc:null;}, low:false},
+    {label:'Gross yield',                     fn:function(p){return p.yield?parseFloat(p.yield).toFixed(1)+'%':'\u2014';}, num:function(p){return parseFloat(p.yield)||0;}, low:false},
+    {label:'Bed / Bath',                      fn:function(p){return p.beds?esc(p.beds)+' / '+esc(p.baths||'\u2014'):'\u2014';}, num:null},
+    {label:'Tenure',                          fn:function(p){return esc(p.tenure+(p.lease?' ('+p.lease+'yr)':''));}, num:null},
+    {label:'Outdoor',                         fn:function(p){return esc(p.outdoor||'\u2014');}, num:null},
+    {label:'Service charge',                  fn:function(p){return p.svc?C+parseInt(p.svc,10).toLocaleString('en-GB')+'/yr':'\u2014';}, num:function(p){return parseInt(p.svc,10)||0;}, low:true},
+    {label:'Date',                            fn:function(p){return fmtDate(p.date);}, num:null},
   ];
-  var html='<div style="padding:12px 14px 80px" class="fi"><div style="overflow-x:auto">'
+
+  // For numeric rows, find best value to highlight
+  function bestIdx(row){
+    if(!row.num)return-1;
+    var vals=selected.map(function(p){var v=row.num(p);return v===null?NaN:v;});
+    var valids=vals.filter(function(v){return!isNaN(v)&&v>0;});
+    if(!valids.length)return-1;
+    var best=row.low?Math.min.apply(null,valids):Math.max.apply(null,valids);
+    return vals.indexOf(best);
+  }
+
+  var html='<div style="padding:12px 14px 80px" class="fi"><div style="overflow-x:auto;-webkit-overflow-scrolling:touch">'
     +'<table style="border-collapse:collapse;min-width:100%;font-size:12px">'
+    // Header row with property names
     +'<tr>'
-      +'<th style="text-align:left;padding:6px 8px;font-size:10px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.06em;border-bottom:1px solid var(--bd);min-width:100px"></th>'
+      +'<th style="text-align:left;padding:6px 8px;font-size:10px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.06em;border-bottom:2px solid var(--bd);min-width:120px;position:sticky;left:0;background:var(--bg)"></th>'
       +selected.map(function(p){
-        return'<th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--bd);max-width:140px;min-width:110px">'
+        return'<th style="text-align:left;padding:6px 10px;border-bottom:2px solid var(--bd);min-width:120px;max-width:160px;vertical-align:bottom">'
           +'<div style="font-size:12px;font-weight:600;color:var(--t);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(p.address.split(',')[0])+'</div>'
-          +(p.area2?'<div style="font-size:10px;color:var(--t3)">'+esc(p.area2.split(',')[0])+'</div>':'')
+          +(p.area2?'<div style="font-size:10px;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(p.area2.split(',')[0])+'</div>':'')
+          +(p.url?'<a href="'+esc(p.url)+'" target="_blank" style="font-size:10px;color:var(--a);text-decoration:none">View \u2197</a>':'')
         +'</th>';
       }).join('')
     +'</tr>';
-  ROWS.forEach(function(row){
-    html+='<tr>'
-      +'<td style="padding:7px 8px;font-size:11px;color:var(--t2);white-space:nowrap;border-bottom:1px solid var(--bd)">'+row[0]+'</td>'
-      +selected.map(function(p){return'<td style="padding:7px 8px;border-bottom:1px solid var(--bd);font-weight:500">'+row[1](p)+'</td>';}).join('')
+
+  ROWS.forEach(function(row,ri){
+    var bi=bestIdx(row);
+    var isAlt=ri%2===0;
+    html+='<tr style="background:'+(isAlt?'var(--sf2)':'var(--sf)')+'">'
+      +'<td style="padding:7px 8px;font-size:11px;color:var(--t2);white-space:nowrap;border-bottom:1px solid var(--bd);position:sticky;left:0;background:'+(isAlt?'var(--sf2)':'var(--sf)')+'">'+row.label+'</td>'
+      +selected.map(function(p,pi){
+        var v=row.fn(p);
+        var isBest=bi===pi;
+        return'<td style="padding:7px 10px;border-bottom:1px solid var(--bd);font-weight:'+(isBest?'700':'500')+';color:'+(isBest?'var(--a)':'var(--t)')+'">'+v+'</td>';
+      }).join('')
     +'</tr>';
   });
-  html+='</table></div></div>';
+
+  html+='</table></div>'
+    +'<div style="font-size:10px;color:var(--t3);margin-top:10px;padding:0 2px"><span style="color:var(--a);font-weight:700">&bull;</span> Green = best value in row</div>'
+  +'</div>';
   setScr(html);
 }
 
@@ -1094,6 +1129,43 @@ function buildMortgageHtml(p){
     +'</table></div>';
 }
 
+
+// ─── Sales data section ───────────────────────────────────────
+function buildSalesDataHtml(p){
+  function srow(label,field,val){
+    return'<tr><td>'+label+'</td><td style="text-align:right">£&thinsp;<input type="number" class="oi" data-f="'+field+'" value="'+esc(val||'')+'" placeholder="0"></td></tr>';
+  }
+  var sp=parseInt(p.soldPrice,10)||0;
+  var ar2=parseInt(p.actualResale,10)||0;
+  var profit=ar2&&sp?ar2-sp:null;
+  return'<div id="sales-sec">'+sh('Sales &amp; resale prices')
+    +'<table class="otbl">'
+      +'<tr><td>Final sold price</td>'
+        +'<td style="text-align:right;white-space:nowrap">'
+          +'<input type="month" class="oi" data-f="soldDate" value="'+esc(p.soldDate||'')+'" style="width:110px;border:1px solid var(--bd2);border-radius:6px;padding:2px 4px;font-size:11px">'
+          +'&ensp;£&thinsp;<input type="number" class="oi" data-f="soldPrice" value="'+esc(p.soldPrice||'')+'" placeholder="0" style="width:80px">'
+        +'</td>'
+      +'</tr>'
+      +'<tr id="add-to-sales-btn" style="'+(sp?'':'display:none')+'">'
+        +'<td colspan="2" style="padding:4px 10px;text-align:right">'
+          +'<button data-action="add-to-sales" style="font-size:11px;font-weight:600;color:var(--a);background:none;border:none;cursor:pointer;font-family:\'DM Sans\',sans-serif">+ Add to Sales History</button>'
+        +'</td>'
+      +'</tr>'
+      +srow('Target resale price','targetResale', p.targetResale)
+      +'<tr><td>Actual resale price</td>'
+        +'<td style="text-align:right;white-space:nowrap">'
+          +'<input type="month" class="oi" data-f="resaleDate" value="'+esc(p.resaleDate||'')+'" style="width:110px;border:1px solid var(--bd2);border-radius:6px;padding:2px 4px;font-size:11px">'
+          +'&ensp;£&thinsp;<input type="number" class="oi" data-f="actualResale" value="'+esc(p.actualResale||'')+'" placeholder="0" style="width:80px">'
+        +'</td>'
+      +'</tr>'
+      +'<tr class="profit" id="sales-profit-row" style="'+(profit!==null?'':'display:none')+'">'
+        +'<td>Resale profit</td>'
+        +'<td id="sales-profit" style="color:'+(profit!==null?(profit>=0?'var(--a)':'var(--d)'):'var(--t2)')+'">'
+          +(profit!==null?(profit>=0?'+':'')+C+Math.abs(profit).toLocaleString('en-GB'):'')
+        +'</td>'
+      +'</tr>'
+    +'</table></div>';
+}
 
 function showList(){
   screen='list';
@@ -1251,6 +1323,8 @@ function showAnalysis(){
     +buildMortgageHtml(p)
     // Comparables
     +buildCompsHtml(p)
+    // Sales & resale data
+    +buildSalesDataHtml(p)
     // Notes
     +sh('Personal notes')
     +'<div class="ic" style="margin-bottom:16px">'
@@ -1385,6 +1459,7 @@ function renderForm(){
         +'</div>'
         +'<div style="display:flex;gap:8px;margin-bottom:8px">'
           +'<div style="flex:2;min-width:0"><label class="fl" style="font-size:10px">Postcode</label><div class="pc-wrap"><input type="text" data-f="comp-postcode" data-i="'+gi+'" data-comp-suggest="1" autocomplete="off" value="'+esc(c.postcode||'')+'" placeholder="e.g. SW1A 1AA" style="text-transform:uppercase;width:100%"></div></div>'
+          +(cat==='For Sale'?'<div style="flex:2;min-width:0"><label class="fl" style="font-size:10px">Date listed</label><input type="month" data-f="comp-date-listed" data-i="'+gi+'" value="'+esc(c.dateListed||'')+'"></div>':'')
           +'<div style="flex:2;min-width:0"><label class="fl" style="font-size:10px">Date sold</label><input type="month" data-f="comp-date" data-i="'+gi+'" value="'+esc(c.dateSold||'')+'"></div>'
           +'<div style="flex:1;min-width:0"><label class="fl" style="font-size:10px">Sq Ft</label><input type="number" data-f="comp-sqft" data-i="'+gi+'" value="'+esc(c.sqft||'')+'" placeholder="e.g. 720"></div>'
           +'<div style="flex:1;min-width:0"><label class="fl" style="font-size:10px">Sq M</label><input type="number" data-f="comp-sqm" data-i="'+gi+'" value="'+esc(c.sqm||'')+'" placeholder="e.g. 67"></div>'
@@ -1392,7 +1467,14 @@ function renderForm(){
         +'<div style="display:flex;gap:8px;margin-bottom:8px">'
           +'<div style="flex:1;min-width:0"><label class="fl" style="font-size:10px">Bedrooms</label><input type="number" data-f="comp-beds" data-i="'+gi+'" value="'+esc(c.beds||'')+'" placeholder="0"></div>'
           +'<div style="flex:2;min-width:0"><label class="fl" style="font-size:10px">Outdoor space</label><select data-f="comp-outdoor" data-i="'+gi+'">'+opts(OUTDOOR,c.outdoor||'None')+'</select></div>'
-          +(cat==='For Sale'?'<div style="flex-shrink:0;display:flex;align-items:center;gap:6px;padding-top:20px"><input type="checkbox" data-f="comp-auction" data-i="'+gi+'"'+(c.auction?' checked':'')+' style="width:16px;height:16px;accent-color:var(--a);cursor:pointer"><span style="font-size:12px;color:var(--t2)">Auction</span></div>':'')
+          +(cat==='For Sale'
+            ?'<div style="flex-shrink:0;display:flex;align-items:center;gap:6px;padding-top:20px">'
+              +'<label style="display:flex;align-items:center;gap:6px;cursor:pointer">'
+                +'<input type="checkbox" data-f="comp-auction" data-i="'+gi+'"'+(c.auction?' checked':'')+' style="width:16px;height:16px;accent-color:var(--a);cursor:pointer">'
+                +'<span style="font-size:12px;color:var(--t2)">Auction</span>'
+              +'</label>'
+            +'</div>'
+            :'')
         +'</div>'
         +'<div class="fg" style="margin-bottom:0"><label class="fl" style="font-size:10px">Notes</label><input type="text" data-f="comp-notes" data-i="'+gi+'" value="'+esc(c.notes||'')+'" placeholder="e.g. top floor, period features"></div>'
       +'</div>';
@@ -1446,7 +1528,7 @@ function renderForm(){
 function newForm(){
   return{id:Date.now(),address:'',area2:'',price:'',area:'',unit:'sq ft',beds:'',baths:'',
     method:'Private treaty',date:'',tenure:'Freehold',lease:'',outdoor:'None',svc:'',
-    notes:'',yield:'',comps:[],renoVat:false,financing:{},leaseExt:{},url:'',mortgage:{},
+    notes:'',yield:'',comps:[],renoVat:false,financing:{},leaseExt:{},url:'',mortgage:{},soldPrice:'',soldDate:'',targetResale:'',actualResale:'',resaleDate:'',
     renos:RCATS.map(function(cat){return{cat:cat,c:''}}),
     fees: FCATS.map(function(cat){return{cat:cat,c:'',pct:''}}),
     prior:[],arch:false,status:'Active',offer:{}};
@@ -1665,7 +1747,42 @@ document.addEventListener('click',function(e){
     showList();
     return;
   }
-  if(a==='go-compare'){tab='compare';showCompare();return;}
+  if(a==='add-to-sales'){
+    var p=props.find(function(x){return x.id===vid});
+    if(!p)return;
+    // Read from DOM input directly in case blur hasn't fired yet on iOS
+    var spInp=document.querySelector('[data-f="soldPrice"]');
+    if(spInp&&spInp.value)p.soldPrice=spInp.value;
+    if(!p.soldPrice)return;
+    var newComp={
+      cat:'Sold',
+      addr:p.address+(p.area2?', '+p.area2:''),
+      postcode:getSubjectPc(p),
+      price:p.soldPrice,
+      sqft:p.unit==='sq ft'?p.area:'',
+      sqm:p.unit==='sq m'?p.area:'',
+      beds:p.beds||'',
+      outdoor:p.outdoor||'None',
+      notes:'Final sold price',
+      dateSold:p.soldDate||'',
+      mapOn:true,
+      auction:false
+    };
+    if(!p.comps)p.comps=[];
+    var already=p.comps.some(function(c){return c.cat==='Sold'&&c.price===p.soldPrice&&c.notes==='Final sold price';});
+    if(!already){
+      p.comps.push(newComp);
+      save();
+      // Visual feedback — change button text briefly
+      var btn=el;
+      if(btn){btn.textContent='\u2713 Added';btn.style.color='var(--a)';setTimeout(function(){btn.textContent='+ Add to Sales History';},2000);}
+    } else {
+      el.textContent='Already added';
+      setTimeout(function(){el.textContent='+ Add to Sales History';},2000);
+    }
+    return;
+  }
+  if(a==='go-compare')  {tab='compare';showCompare();return;}
   if(a==='clear-compare'){compareIds={};showList();return;}
   if(a==='add')    {goAdd();return;}
   if(a==='view')   {goView(id);return;}
@@ -1689,7 +1806,7 @@ document.addEventListener('click',function(e){
   if(a==='ap'){form.prior=(form.prior||[]).concat([{p:'',m:''}]);renderForm();return;}
   if(a==='rp'){form.prior=(form.prior||[]).filter(function(_,j){return j!==i});renderForm();return;}
   // Form — comps
-  if(a==='ac'){form.comps=(form.comps||[]).concat([{cat:el.dataset.cat,addr:'',postcode:'',price:'',sqft:'',sqm:'',mapOn:true,beds:'',outdoor:'None',notes:'',dateSold:'',auction:false}]);renderForm();return;}
+  if(a==='ac'){form.comps=(form.comps||[]).concat([{cat:el.dataset.cat,addr:'',postcode:'',price:'',sqft:'',sqm:'',mapOn:true,beds:'',outdoor:'None',notes:'',dateSold:'',dateListed:'',auction:false}]);renderForm();return;}
   if(a==='rc'){form.comps=(form.comps||[]).filter(function(_,j){return j!==i});renderForm();return;}
 
   // Analysis — renos
@@ -1799,6 +1916,33 @@ document.addEventListener('input',function(e){
     var fInp=$('offer-fin-inp');if(fInp)fInp.value=c.finCost||'';
     save();
     refreshOfferCells(p);
+    return;
+  }
+
+  // Analysis — sales & resale price fields
+  var SALES_FIELDS={soldPrice:1,soldDate:1,targetResale:1,actualResale:1,resaleDate:1};
+  if(el.dataset.f&&SALES_FIELDS[el.dataset.f]&&screen==='analysis'){
+    var p=props.find(function(x){return x.id===vid});
+    if(p){
+      p[el.dataset.f]=val;
+      save();
+      // Only update the profit cell, not the whole section
+      var sp=parseInt(p.soldPrice,10)||0;
+      var ar2=parseInt(p.actualResale,10)||0;
+      var profitEl=$('sales-profit');
+      var profitRow=$('sales-profit-row');
+      if(profitEl){
+        var profit=ar2&&sp?ar2-sp:null;
+        profitEl.textContent=profit!==null?(profit>=0?'+':'')+C+Math.abs(profit).toLocaleString('en-GB'):'';
+        profitEl.style.color=profit===null?'var(--t2)':profit>=0?'var(--a)':'var(--d)';
+        if(profitRow)profitRow.style.display=profit!==null?'':'none';
+      }
+      // Show/hide the "Add to Sales History" button when soldPrice changes
+      if(el.dataset.f==='soldPrice'){
+        var btn=$('add-to-sales-btn');
+        if(btn)btn.style.display=sp?'':'none';
+      }
+    }
     return;
   }
 
@@ -1918,7 +2062,7 @@ document.addEventListener('input',function(e){
   var f=el.dataset.f;
   if(!f||screen!=='form')return;
   var i=el.dataset.i!=null?+el.dataset.i:null;
-  var DIRECT={address:1,area2:1,price:1,beds:1,baths:1,method:1,svc:1,lease:1,yield:1,notes:1,outdoor:1,url:1};
+  var DIRECT={address:1,area2:1,price:1,beds:1,baths:1,method:1,svc:1,lease:1,yield:1,notes:1,outdoor:1,url:1,soldPrice:1,soldDate:1,targetResale:1,actualResale:1,resaleDate:1};
   if(DIRECT[f])             form[f]=val;
   else if(f==='tenure')     {form.tenure=val;renderForm();}
   else if(f==='area-ft')    {form.area=val;form.unit='sq ft';var o=$('ism');if(o)o.value='';}
@@ -1952,6 +2096,13 @@ document.addEventListener('change',function(e){
     return;
   }
 
+  // Analysis — month pickers fire change not input on iOS
+  if((el.dataset.f==='soldDate'||el.dataset.f==='resaleDate')&&screen==='analysis'){
+    var p=props.find(function(x){return x.id===vid});
+    if(p){p[el.dataset.f]=el.value;save();}
+    return;
+  }
+
   if(!f||screen!=='form')return;
   if(f==='tenure')  {form.tenure=val;renderForm();}
   else if(f==='method')  form.method=val;
@@ -1961,7 +2112,8 @@ document.addEventListener('change',function(e){
   else if(f==='comp-sqft'&&i!=null&&form.comps[i]){form.comps[i].sqft=val;if(val)form.comps[i].sqm='';}
   else if(f==='comp-sqm' &&i!=null&&form.comps[i]){form.comps[i].sqm=val;if(val)form.comps[i].sqft='';}
   else if(f==='comp-outdoor'&&i!=null&&form.comps[i])form.comps[i].outdoor=val;
-  else if(f==='comp-date'   &&i!=null&&form.comps[i])form.comps[i].dateSold=val;
+  else if(f==='comp-date'       &&i!=null&&form.comps[i]) form.comps[i].dateSold=val;
+  else if(f==='comp-date-listed'&&i!=null&&form.comps[i]) form.comps[i].dateListed=val;
   else if(f==='comp-auction'&&i!=null&&form.comps[i])form.comps[i].auction=el.checked;
 });
 
